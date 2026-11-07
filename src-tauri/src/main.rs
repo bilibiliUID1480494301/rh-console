@@ -123,6 +123,36 @@ async fn plugin_costs(
 }
 
 #[tauri::command]
+async fn admin_get(
+    base_url: String,
+    username: String,
+    password: String,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    if !path.starts_with("/api/") {
+        return Err("只允许 /api/ 下的只读路径".into());
+    }
+    let base = base_of(&base_url);
+    let cookie = login_cookie(&base, &username, &password).await?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(format!("{base}{path}"))
+        .header("Cookie", cookie)
+        .send()
+        .await
+        .map_err(|e| format!("请求失败：{e}"))?;
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    if status != 200 {
+        return Err(format!("HTTP {status}：{body}"));
+    }
+    serde_json::from_str(&body).map_err(|e| format!("不是 JSON：{e}"))
+}
+
+#[tauri::command]
 fn site_list(app: tauri::AppHandle) -> Vec<Site> {
     load_sites(&app)
 }
@@ -390,6 +420,7 @@ fn main() {
             site_add,
             subscribe_events,
             plugin_costs,
+            admin_get,
             site_remove,
             env_detect,
             instance_create

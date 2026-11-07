@@ -185,3 +185,36 @@ function exportCsv() {
 
 $("plug-load").onclick = loadPlugins;
 $("plug-csv").onclick = exportCsv;
+
+// ---- 渠道（只读） ----
+async function loadChannels() {
+  if (!invoke) return;
+  $("ch-msg").textContent = "读取中…";
+  try {
+    const st = await invoke("admin_get", {
+      baseUrl: $("base").value, username: $("user").value, password: $("pass").value,
+      path: "/api/state",
+    });
+    const keys = st.keys || st.channels || [];
+    $("ch-msg").textContent =
+      `${keys.length} 个渠道 · 协议 ${(st.protocols || []).length} 种 · 版本 ${st.version}`;
+    renderChannels(keys);
+  } catch (e) {
+    $("ch-msg").textContent = "读取失败：" + e;
+  }
+}
+
+function renderChannels(keys) {
+  const box = $("ch-out");
+  if (!keys.length) { box.innerHTML = '<div class="hint">没有渠道</div>'; return; }
+  const rows = keys.map((k) => `<tr>
+    <td>${k.key_id || ""}</td><td>${k.label || ""}</td>
+    <td>${k.protocol || ""}</td>
+    <td>${k.cooldown_tier ? "冷却 " + k.cooldown_tier : "正常"}</td>
+    <td>${(k.models || []).length}</td></tr>`).join("");
+  box.innerHTML = `<table style="border-collapse:collapse;width:100%;font-size:13px">
+    <thead><tr><th>ID</th><th>标签</th><th>协议</th><th>状态</th><th>模型数</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
+$("ch-load").onclick = loadChannels;
