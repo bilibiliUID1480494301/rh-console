@@ -356,6 +356,7 @@ async fn instance_create(
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             site_list,
             site_test,

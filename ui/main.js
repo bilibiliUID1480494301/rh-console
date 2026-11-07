@@ -108,6 +108,14 @@ if (listen) {
     if (msg.type === "state.changed") {
       const bar = document.getElementById("live");
       if (bar) bar.textContent = "服务端状态已变化 · " + new Date().toLocaleTimeString();
+      const notify = window.__TAURI__?.notification;
+      if (notify) {
+        notify.isPermissionGranted().then((ok) => {
+          if (!ok) return notify.requestPermission();
+        }).then((ok) => {
+          if (ok) notify.sendNotification({ title: "relay-hub", body: "上游状态发生变化" });
+        }).catch(() => {});
+      }
     }
   });
 }
