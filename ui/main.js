@@ -210,7 +210,8 @@ function renderChannels(keys) {
   const rows = keys.map((k) => `<tr>
     <td>${k.key_id || ""}</td><td>${k.label || ""}</td>
     <td>${k.protocol || ""}</td>
-    <td>${k.cooldown_tier ? "冷却 " + k.cooldown_tier : "正常"}</td>
+    <td>${k.cooling_down_for > 0 ? "冷却 " + Math.round(k.cooling_down_for) + "s"
+            : (k.enabled === false ? "已停用" : (k.available === false ? "不可用" : "正常"))}</td>
     <td>${(k.models || []).length}</td></tr>`).join("");
   box.innerHTML = `<table style="border-collapse:collapse;width:100%;font-size:13px">
     <thead><tr><th>ID</th><th>标签</th><th>协议</th><th>状态</th><th>模型数</th></tr></thead>
@@ -218,3 +219,27 @@ function renderChannels(keys) {
 }
 
 $("ch-load").onclick = loadChannels;
+
+// ---- 令牌（只读） ----
+async function loadTokens() {
+  if (!invoke) return;
+  $("tk-msg").textContent = "读取中…";
+  try {
+    const data = await invoke("admin_get", {
+      baseUrl: $("base").value, username: $("user").value, password: $("pass").value,
+      path: "/api/tokens",
+    });
+    const list = data.tokens || [];
+    $("tk-msg").textContent = `${list.length} 个令牌`;
+    const box = $("tk-out");
+    if (!list.length) { box.innerHTML = '<div class="hint">没有令牌</div>'; return; }
+    box.innerHTML = `<table style="border-collapse:collapse;width:100%;font-size:13px">
+      <thead><tr><th>名称</th><th>尾号</th><th>状态</th><th>已用</th></tr></thead><tbody>${
+        list.map((t) => `<tr><td>${t.name || t.token_id}</td><td>…${t.tail || ""}</td>
+          <td>${t.disabled ? "停用" : "启用"}</td><td>${t.used ?? t.requests ?? "-"}</td></tr>`).join("")
+      }</tbody></table>`;
+  } catch (e) {
+    $("tk-msg").textContent = "读取失败：" + e;
+  }
+}
+$("tk-load").onclick = loadTokens;
