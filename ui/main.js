@@ -137,3 +137,51 @@ if (listen) {
 
 if (!invoke) { $("probe").textContent = "未运行在 Tauri 中（浏览器预览模式）"; }
 loadSites();
+
+// ---- 插件用量 ----
+let plugRows = [];
+
+async function loadPlugins() {
+  if (!invoke) return;
+  const days = parseInt($("days").value, 10) || 7;
+  $("plug-msg").textContent = "读取中…";
+  try {
+    const data = await invoke("plugin_costs", {
+      baseUrl: $("base").value, username: $("user").value, password: $("pass").value, days,
+    });
+    plugRows = data.plugins || [];
+    $("plug-msg").textContent = plugRows.length ? `${plugRows.length} 个插件 · ${data.days} 天` : "没有记录";
+    renderPlugins();
+  } catch (e) {
+    $("plug-msg").textContent = "读取失败：" + e;
+  }
+}
+
+function renderPlugins() {
+  const box = $("plug-out");
+  if (!plugRows.length) { box.innerHTML = '<div class="hint">暂无数据</div>'; return; }
+  const head = "<tr><th>插件</th><th>请求</th><th>失败</th><th>失败率</th><th>输入</th><th>输出</th><th>平均延迟</th><th>版本</th></tr>";
+  const body = plugRows.map((r) => `<tr>
+    <td>${r.plugin}</td><td>${r.requests}</td><td>${r.failed}</td>
+    <td>${r.fail_rate}%</td><td>${r.tokens_in}</td><td>${r.tokens_out}</td>
+    <td>${r.avg_latency_ms}ms</td><td>${r.version || "-"}</td></tr>`).join("");
+  box.innerHTML = `<table style="border-collapse:collapse;width:100%;font-size:13px">
+    <thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+function exportCsv() {
+  if (!plugRows.length) { $("plug-msg").textContent = "没有可导出的数据"; return; }
+  const cols = ["plugin", "requests", "failed", "fail_rate", "tokens_in", "tokens_out", "avg_latency_ms", "version"];
+  const lines = [cols.join(",")].concat(
+    plugRows.map((r) => cols.map((c) => JSON.stringify(r[c] ?? "")).join(",")),
+  );
+  const blob = new Blob([lines.join(String.fromCharCode(10))], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `plugin-usage-${$("days").value || 7}d.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+$("plug-load").onclick = loadPlugins;
+$("plug-csv").onclick = exportCsv;

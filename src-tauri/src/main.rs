@@ -96,6 +96,33 @@ async fn subscribe_events(
 }
 
 #[tauri::command]
+async fn plugin_costs(
+    base_url: String,
+    username: String,
+    password: String,
+    days: u32,
+) -> Result<serde_json::Value, String> {
+    let base = base_of(&base_url);
+    let cookie = login_cookie(&base, &username, &password).await?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(format!("{base}/api/plugin-costs?days={days}"))
+        .header("Cookie", cookie)
+        .send()
+        .await
+        .map_err(|e| format!("请求失败：{e}"))?;
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    if status != 200 {
+        return Err(format!("HTTP {status}：{body}"));
+    }
+    serde_json::from_str(&body).map_err(|e| format!("不是 JSON：{e}"))
+}
+
+#[tauri::command]
 fn site_list(app: tauri::AppHandle) -> Vec<Site> {
     load_sites(&app)
 }
@@ -362,6 +389,7 @@ fn main() {
             site_test,
             site_add,
             subscribe_events,
+            plugin_costs,
             site_remove,
             env_detect,
             instance_create
