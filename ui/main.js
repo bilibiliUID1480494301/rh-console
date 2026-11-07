@@ -105,9 +105,24 @@ if (listen) {
   listen("relayhub://event", (e) => {
     let msg;
     try { msg = JSON.parse(e.payload); } catch { return; }
+    const bar = document.getElementById("live");
+    const notify2 = (title, body) => {
+      const n = window.__TAURI__?.notification;
+      if (!n) return;
+      n.isPermissionGranted().then((ok) => (ok ? true : n.requestPermission()))
+        .then((ok) => { if (ok) n.sendNotification({ title, body }); })
+        .catch(() => {});
+    };
+
+    if (msg.type === "channel.cooldown") {
+      if (bar) bar.textContent = `渠道 ${msg.id} 进入冷却（${msg.tier}）· ` + new Date().toLocaleTimeString();
+      notify2("relay-hub · 渠道冷却", `渠道 ${msg.id} 进入 ${msg.tier} 冷却`);
+    } else if (msg.type === "channel.recovered") {
+      if (bar) bar.textContent = `渠道 ${msg.id} 已恢复 · ` + new Date().toLocaleTimeString();
+      notify2("relay-hub · 渠道恢复", `渠道 ${msg.id} 已退出冷却`);
+    }
+
     if (msg.type === "state.changed") {
-      const bar = document.getElementById("live");
-      if (bar) bar.textContent = "服务端状态已变化 · " + new Date().toLocaleTimeString();
       const notify = window.__TAURI__?.notification;
       if (notify) {
         notify.isPermissionGranted().then((ok) => {
