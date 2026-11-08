@@ -344,3 +344,19 @@ async function loadRequests() {
 }
 $("usg-load").onclick = loadUsage;
 $("log-load").onclick = loadRequests;
+
+// ---- 主题（服务端只收颜色，前端不做二次校验，交了就是服务端说了算） ----
+$("thm-save").onclick = async () => {
+  if (!invoke) return;
+  $("thm-msg").textContent = "保存中…";
+  try {
+    await invoke("admin_post", {
+      baseUrl: $("base").value, username: $("user").value, password: $("pass").value,
+      path: "/api/theme",
+      body: { primary: $("thm-primary").value.trim(), bg: $("thm-bg").value.trim() },
+    });
+    $("thm-msg").textContent = "已保存（非法颜色会被服务端丢弃）";
+  } catch (e) {
+    $("thm-msg").textContent = "保存失败：" + e;
+  }
+};
