@@ -41,6 +41,7 @@ async function save() {
     });
     $("pass").value = "";
     $("probe").textContent = "已保存（凭证已写入系统钥匙串）";
+    checkSecurity();
     invoke("subscribe_events", {
       baseUrl: $("base").value, username: $("user").value, password: $("pass").value,
     }).catch(() => {});
@@ -243,3 +244,41 @@ async function loadTokens() {
   }
 }
 $("tk-load").onclick = loadTokens;
+
+// ---- 安全公告 / 版本检查 ----
+function renderSecurity(d) {
+  const box = document.getElementById("sec");
+  if (!box) return;
+  const affected = (d.advisories || []).filter((a) => a.affects_current);
+  const parts = [];
+  if (affected.length) {
+    const a = affected[0];
+    const id = a.cve || a.ghsa || "未知公告";
+    parts.push(`<div style="padding:8px 12px;border-radius:8px;background:#dc2626;color:#fff">
+      当前版本 ${d.current} 受 ${id} 影响（${a.severity}）· 修复版本 ${a.patched || "未知"}</div>`);
+  } else if ((d.advisories || []).length) {
+    parts.push(`<div style="padding:8px 12px;border-radius:8px;background:#16a34a;color:#fff">
+      已知公告均不影响当前版本（${d.advisories.length} 条）</div>`);
+  }
+  if (d.update && d.update.behind) {
+    parts.push(`<div style="padding:8px 12px;border-radius:8px;background:#d97706;color:#fff;margin-top:6px">
+      有新版本 ${d.update.latest}（当前 ${d.update.current}）· 建议 pip install -U hubrelay</div>`);
+  }
+  if (d.error) {
+    parts.push(`<div class="hint" style="margin-top:6px">部分检查失败：${d.error}</div>`);
+  }
+  box.innerHTML = parts.join("");
+}
+
+async function checkSecurity() {
+  if (!invoke) return;
+  try {
+    renderSecurity(await invoke("admin_get", {
+      baseUrl: $("base").value, username: $("user").value, password: $("pass").value,
+      path: "/api/security",
+    }));
+  } catch (e) {
+    const box = document.getElementById("sec");
+    if (box) box.innerHTML = `<div class="hint">安全检查失败：${e}</div>`;
+  }
+}
