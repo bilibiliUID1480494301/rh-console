@@ -124,6 +124,7 @@ if (listen) {
     }
 
     if (msg.type === "state.changed") {
+      refreshVisible();
       const notify = window.__TAURI__?.notification;
       if (notify) {
         notify.isPermissionGranted().then((ok) => {
@@ -282,3 +283,64 @@ async function checkSecurity() {
     if (box) box.innerHTML = `<div class="hint">安全检查失败：${e}</div>`;
   }
 }
+
+// 状态一变就重载当前可见的卡片，不用手点刷新
+function refreshVisible() {
+  const loaded = (id) => {
+    const el = document.getElementById(id);
+    return el && el.querySelector("table");
+  };
+  if (loaded("ch-out")) loadChannels();
+  if (loaded("tk-out")) loadTokens();
+  if (loaded("plug-out")) loadPlugins();
+}
+
+// ---- 用量（结构未知，按 key/value 平铺，不猜字段名） ----
+async function loadUsage() {
+  if (!invoke) return;
+  $("usg-msg").textContent = "读取中…";
+  try {
+    const data = await invoke("admin_get", {
+      baseUrl: $("base").value, username: $("user").value, password: $("pass").value,
+      path: "/api/usage",
+    });
+    const flat = [];
+    const walk = (obj, prefix) => {
+      for (const [k, v] of Object.entries(obj || {})) {
+        if (v && typeof v === "object" && !Array.isArray(v)) walk(v, prefix + k + ".");
+        else flat.push([prefix + k, Array.isArray(v) ? `${v.length} 项` : String(v)]);
+      }
+    };
+    walk(data, "");
+    $("usg-msg").textContent = `${flat.length} 个字段`;
+    $("usg-out").innerHTML = `<table style="border-collapse:collapse;width:100%;font-size:13px">
+      <tbody>${flat.map(([k, v]) => `<tr><td style="color:#6b7280;padding-right:12px">${k}</td><td>${v}</td></tr>`).join("")}</tbody></table>`;
+  } catch (e) {
+    $("usg-msg").textContent = "读取失败：" + e;
+  }
+}
+
+// ---- 请求日志（列取自数据本身，字段变了也不会空白） ----
+async function loadRequests() {
+  if (!invoke) return;
+  $("log-msg").textContent = "读取中…";
+  try {
+    const data = await invoke("admin_get", {
+      baseUrl: $("base").value, username: $("user").value, password: $("pass").value,
+      path: "/api/requests",
+    });
+    const rows = data.items || data.requests || data.rows || [];
+    $("log-msg").textContent = `${rows.length} 条`;
+    const box = $("log-out");
+    if (!rows.length) { box.innerHTML = '<div class="hint">暂无记录</div>'; return; }
+    const cols = Object.keys(rows[0]).slice(0, 8);
+    box.innerHTML = `<table style="border-collapse:collapse;width:100%;font-size:12px">
+      <thead><tr>${cols.map((c) => `<th style="text-align:left;padding:4px 8px">${c}</th>`).join("")}</tr></thead>
+      <tbody>${rows.slice(0, 50).map((r) => `<tr>${cols.map((c) =>
+        `<td style="padding:4px 8px">${String(r[c] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  } catch (e) {
+    $("log-msg").textContent = "读取失败：" + e;
+  }
+}
+$("usg-load").onclick = loadUsage;
+$("log-load").onclick = loadRequests;
