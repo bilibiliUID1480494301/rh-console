@@ -402,3 +402,23 @@ async function doUpgrade(version) {
     }
   }
 }
+
+// ---- 本机自检 ----
+$("doc-run").onclick = async () => {
+  if (!invoke) return;
+  $("doc-msg").textContent = "运行中…";
+  try {
+    const checks = await invoke("doctor_local");
+    const list = Array.isArray(checks) ? checks : (checks.checks || []);
+    const bad = list.filter((c) => !c.ok);
+    $("doc-msg").textContent = bad.length ? `${bad.length} 项未通过` : "全部通过";
+    $("doc-out").innerHTML = `<table style="border-collapse:collapse;width:100%;font-size:13px">
+      <tbody>${list.map((c) => `<tr>
+        <td style="width:22px">${c.ok ? "✓" : "✗"}</td>
+        <td style="width:150px">${c.name || ""}</td>
+        <td>${c.detail || ""}${c.fix && !c.ok ? `<br><small style="color:#b45309">修复：${c.fix}</small>` : ""}</td>
+      </tr>`).join("")}</tbody></table>`;
+  } catch (e) {
+    $("doc-msg").textContent = "自检失败：" + e;
+  }
+};

@@ -185,6 +185,23 @@ async fn admin_post(
 }
 
 #[tauri::command]
+fn doctor_local() -> Result<serde_json::Value, String> {
+    // doctor 只对本机有意义（查的是本机 Python/端口/数据目录），远程实例不该由它代跑
+    let py = probe_cmd("python", &["--version"]).map(|_| "python".to_string())
+        .or_else(|| probe_cmd("python3", &["--version"]).map(|_| "python3".to_string()))
+        .ok_or_else(|| "未找到 python/python3，无法运行 doctor".to_string())?;
+
+    let out = std::process::Command::new(py)
+        .args(["-m", "relayhub.gateway", "doctor", "--json"])
+        .output()
+        .map_err(|e| format!("doctor 启动失败：{e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(text.trim())
+        .map_err(|e| format!("doctor 输出不是 JSON：{e}"))?;
+    Ok(parsed)
+}
+
+#[tauri::command]
 fn site_list(app: tauri::AppHandle) -> Vec<Site> {
     load_sites(&app)
 }
@@ -454,6 +471,7 @@ fn main() {
             plugin_costs,
             admin_get,
             admin_post,
+            doctor_local,
             site_remove,
             env_detect,
             instance_create
