@@ -263,7 +263,11 @@ function renderSecurity(d) {
   }
   if (d.update && d.update.behind) {
     parts.push(`<div style="padding:8px 12px;border-radius:8px;background:#d97706;color:#fff;margin-top:6px">
-      有新版本 ${d.update.latest}（当前 ${d.update.current}）· 建议 pip install -U hubrelay</div>`);
+      有新版本 ${d.update.latest}（当前 ${d.update.current}）
+      <button id="up-btn" style="margin-left:10px;padding:4px 10px">升级</button>
+      <span id="up-msg" style="margin-left:8px"></span></div>`);
+    const btn = document.getElementById("up-btn");
+    if (btn) btn.onclick = () => doUpgrade(d.update.latest);
   }
   if (d.error) {
     parts.push(`<div class="hint" style="margin-top:6px">部分检查失败：${d.error}</div>`);
@@ -360,3 +364,41 @@ $("thm-save").onclick = async () => {
     $("thm-msg").textContent = "保存失败：" + e;
   }
 };
+
+// ---- 一键升级（服务端验签，失败即拒；强制跳过必须写理由） ----
+async function doUpgrade(version) {
+  const msg = document.getElementById("up-msg");
+  const btn = document.getElementById("up-btn");
+  if (btn) btn.disabled = true;
+  if (msg) msg.textContent = "下载并验签中…";
+  const call = (extra) => invoke("admin_post", {
+    baseUrl: $("base").value, username: $("user").value, password: $("pass").value,
+    path: "/api/update/install",
+    body: Object.assign({ version, apply: true }, extra || {}),
+  });
+
+  try {
+    const r = await call({});
+    if (msg) {
+      msg.textContent = r.restart_pending
+        ? `已安装 ${version}，等待 keepalive 拉起新进程`
+        : `已安装 ${version}（未请求重启）`;
+    }
+    return;
+  } catch (e) {
+    const text = String(e);
+    if (!text.includes("409")) { if (msg) msg.textContent = "升级失败：" + text; if (btn) btn.disabled = false; return; }
+    // 验签未通过：问一次，理由必须写清，服务端会记 update.forced 审计
+    if (msg) msg.textContent = "验签未通过";
+    const NL = String.fromCharCode(10);
+    const reason = window.prompt("验签未通过：" + text.slice(0, 160) + NL + NL + "确认仍要安装请输入原因（至少 8 字，会记入审计）：");
+    if (!reason) { if (btn) btn.disabled = false; return; }
+    try {
+      const r = await call({ force: true, reason });
+      if (msg) msg.textContent = `已强制安装 ${version}（未验签，已记审计）`;
+    } catch (e2) {
+      if (msg) msg.textContent = "强制安装也失败：" + e2;
+      if (btn) btn.disabled = false;
+    }
+  }
+}
