@@ -18,6 +18,9 @@ thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["time"] }
 futures-util = "0.3"
+ed25519-dalek = "2"
+sha2 = "0.10"
+base64 = "0.22"
 
 [profile.release]
 codegen-units = 1
