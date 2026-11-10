@@ -202,6 +202,51 @@ fn doctor_local() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+fn remote_deploy(
+    host: String,
+    key_path: String,
+    version: String,
+    python: String,
+) -> Result<String, String> {
+    // 远程部署 = 用本机 ssh 客户端跑一条命令。
+    // 私钥由用户**每次指定路径**，不落盘、不进钥匙串：远程 shell 的权限比面板密码高一个量级。
+    if !host.chars().all(|c| c.is_ascii_alphanumeric() || "@.-_:".contains(c)) {
+        return Err("host 只允许字母数字与 @ . - _ :".into());
+    }
+    if !version.split('.').all(|p| p.chars().all(|c| c.is_ascii_digit())) {
+        return Err("version 必须形如 1.2.3".into());
+    }
+    let py = if python.trim().is_empty() { "python".to_string() } else { python };
+    // 远端解释器只接受「命令名或绝对路径」：不放行反斜杠与空格，避免拼出第二条命令
+    let py_ok = |c: char| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.');
+    if !py.chars().all(py_ok) {
+        return Err("python 解释器路径不合法".into());
+    }
+
+    let remote = format!(
+        "{py} -m pip install --upgrade --no-input hubrelay=={version} && {py} -m relayhub.gateway --version",
+    );
+    let out = std::process::Command::new("ssh")
+        .args([
+            "-i", &key_path,
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=accept-new",
+            &host,
+            &remote,
+        ])
+        .output()
+        .map_err(|e| format!("调用 ssh 失败：{e}"))?;
+
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    if !out.status.success() {
+        return Err(format!("远程执行失败（{}）：{}{}", out.status.code().unwrap_or(-1), stderr, stdout));
+    }
+    Ok(stdout.trim().to_string())
+}
+
+#[tauri::command]
 fn site_list(app: tauri::AppHandle) -> Vec<Site> {
     load_sites(&app)
 }
@@ -472,6 +517,7 @@ fn main() {
             admin_get,
             admin_post,
             doctor_local,
+            remote_deploy,
             site_remove,
             env_detect,
             instance_create
