@@ -201,49 +201,127 @@ fn doctor_local() -> Result<serde_json::Value, String> {
     Ok(parsed)
 }
 
+const RELEASE_PUBKEY: &str = "UalueWu9iiKHBRQnANytr4J/MDTjlt3NINOjWpdQd0g=";
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn verify_signature(manifest: &str, signature_b64: &str) -> Result<(), String> {
+    use base64::Engine;
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    let engine = base64::engine::general_purpose::STANDARD;
+    let key_bytes = engine.decode(RELEASE_PUBKEY).map_err(|e| e.to_string())?;
+    let key_arr: [u8; 32] = key_bytes.try_into().map_err(|_| "公钥长度不对".to_string())?;
+    let key = VerifyingKey::from_bytes(&key_arr).map_err(|e| e.to_string())?;
+
+    let sig_bytes = engine.decode(signature_b64.trim()).map_err(|e| e.to_string())?;
+    let signature = Signature::from_slice(&sig_bytes).map_err(|e| e.to_string())?;
+    key.verify(manifest.as_bytes(), &signature)
+        .map_err(|_| "签名与清单不匹配（拒绝部署）".to_string())
+}
+
+fn pick_wheel_hash(manifest: &str, version: &str) -> Option<String> {
+    let want = format!("hubrelay-{version}-py3-none-any.whl");
+    for line in manifest.lines() {
+        let mut parts = line.split_whitespace();
+        let hash = parts.next()?;
+        if parts.next() == Some(want.as_str()) {
+            return Some(hash.to_string());
+        }
+    }
+    None
+}
+
 #[tauri::command]
-fn remote_deploy(
+async fn remote_deploy(
     host: String,
     key_path: String,
     version: String,
     python: String,
 ) -> Result<String, String> {
-    // 远程部署 = 用本机 ssh 客户端跑一条命令。
-    // 私钥由用户**每次指定路径**，不落盘、不进钥匙串：远程 shell 的权限比面板密码高一个量级。
+    // 远程部署**先在本地验签再传**：不能让远端只凭 PyPI 的 TLS 信任就装代码。
+    // 私钥只收路径、不落盘：远程 shell 的权限比面板密码高一个量级。
     if !host.chars().all(|c| c.is_ascii_alphanumeric() || "@.-_:".contains(c)) {
         return Err("host 只允许字母数字与 @ . - _ :".into());
     }
-    if !version.split('.').all(|p| p.chars().all(|c| c.is_ascii_digit())) {
+    if !version.split('.').all(|p| p.chars().all(|c| c.is_ascii_digit())) || version.matches('.').count() != 2 {
         return Err("version 必须形如 1.2.3".into());
     }
     let py = if python.trim().is_empty() { "python".to_string() } else { python };
-    // 远端解释器只接受「命令名或绝对路径」：不放行反斜杠与空格，避免拼出第二条命令
     let py_ok = |c: char| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.');
     if !py.chars().all(py_ok) {
         return Err("python 解释器路径不合法".into());
     }
 
-    let remote = format!(
-        "{py} -m pip install --upgrade --no-input hubrelay=={version} && {py} -m relayhub.gateway --version",
-    );
-    let out = std::process::Command::new("ssh")
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let base = format!("https://github.com/bilibiliUID1480494301/relay-hub/releases/download/v{version}");
+
+    let manifest = client.get(format!("{base}/SHA256SUMS")).send().await
+        .map_err(|e| format!("下载清单失败：{e}"))?.text().await
+        .map_err(|e| e.to_string())?;
+    let signature = client.get(format!("{base}/SHA256SUMS.sig")).send().await
+        .map_err(|e| format!("下载签名失败：{e}"))?.text().await
+        .map_err(|e| e.to_string())?;
+    verify_signature(&manifest, &signature)?;
+
+    let expected = pick_wheel_hash(&manifest, &version)
+        .ok_or_else(|| format!("签名清单里没有 {version} 的 wheel"))?;
+    let name = format!("hubrelay-{version}-py3-none-any.whl");
+    let bytes = client.get(format!("{base}/{name}")).send().await
+        .map_err(|e| format!("下载 wheel 失败：{e}"))?.bytes().await
+        .map_err(|e| e.to_string())?;
+    if sha256_hex(&bytes) != expected {
+        return Err("wheel 与签名清单的哈希不一致（拒绝部署）".into());
+    }
+
+    let dir = std::env::temp_dir().join("relayhub-deploy");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let local = dir.join(&name);
+    std::fs::write(&local, &bytes).map_err(|e| e.to_string())?;
+
+    let remote_tmp = format!("/tmp/{name}");
+    let scp = std::process::Command::new("scp")
         .args([
-            "-i", &key_path,
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=10",
+            "-i", &key_path, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
             "-o", "StrictHostKeyChecking=accept-new",
-            &host,
-            &remote,
+            local.to_str().ok_or("本地路径不可用")?, &format!("{host}:{remote_tmp}"),
+        ])
+        .output()
+        .map_err(|e| format!("调用 scp 失败：{e}"))?;
+    if !scp.status.success() {
+        return Err(format!("scp 失败：{}", String::from_utf8_lossy(&scp.stderr)));
+    }
+
+    let remote = format!(
+        "{py} -m pip install --no-deps --force-reinstall --no-input {remote_tmp} && rm -f {remote_tmp} && {py} -m relayhub.gateway --version"
+    );
+    let ssh = std::process::Command::new("ssh")
+        .args([
+            "-i", &key_path, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=accept-new",
+            &host, &remote,
         ])
         .output()
         .map_err(|e| format!("调用 ssh 失败：{e}"))?;
-
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    if !out.status.success() {
-        return Err(format!("远程执行失败（{}）：{}{}", out.status.code().unwrap_or(-1), stderr, stdout));
+    let stdout = String::from_utf8_lossy(&ssh.stdout).to_string();
+    if !ssh.status.success() {
+        return Err(format!(
+            "远程安装失败（{}）：{}{}",
+            ssh.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&ssh.stderr),
+            stdout
+        ));
     }
-    Ok(stdout.trim().to_string())
+    Ok(format!("已验签并部署 {version} → {}
+{}", host, stdout.trim()))
 }
 
 #[tauri::command]
@@ -524,4 +602,35 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to start relay-hub console");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn picks_requested_wheel_only() {
+        let manifest = "aa  hubrelay-1.2.3-py3-none-any.whl
+bb  hubrelay-1.2.3.tar.gz
+";
+        assert_eq!(pick_wheel_hash(manifest, "1.2.3"), Some("aa".to_string()));
+        assert_eq!(pick_wheel_hash(manifest, "9.9.9"), None);
+    }
+
+    #[test]
+    fn rejects_bad_signature() {
+        // 32 字节全零公钥对应的签名绝不可能是真签名：必须拒绝而不是放行
+        let manifest = "aa  hubrelay-1.2.3-py3-none-any.whl
+";
+        let bad_sig = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
+        assert!(verify_signature(manifest, bad_sig).is_err());
+    }
+
+    #[test]
+    fn sha256_matches_known_vector() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 }
