@@ -52,6 +52,22 @@ async function save() {
   }
 }
 
+const health = {};   // 站点 id -> "ok" | "warn" | "bad" | ""
+
+async function healthDots(sites) {
+  for (const s of sites) {
+    try {
+      const p = await invoke("site_test", { baseUrl: s.base_url, username: s.username });
+      // 只有「能说清状态」的才上色：认证失败是黄（能连上但进不去），连不上是红
+      health[s.id] = p && p.ok ? "ok" : (p && p.status === 401 ? "warn" : "bad");
+    } catch (_) {
+      health[s.id] = "bad";
+    }
+    const row = document.querySelector(`.site[data-id="${s.id}"] .dot`);
+    if (row) row.className = "dot " + (health[s.id] || "");
+  }
+}
+
 async function loadSites() {
   if (!invoke) return;
   const sites = await invoke("site_list");
@@ -61,13 +77,15 @@ async function loadSites() {
   for (const s of sites) {
     const row = document.createElement("div");
     row.className = "site";
-    row.innerHTML = `<div><span class="dot"></span>${s.label}<br><small>${s.base_url} · ${s.username || ""}</small></div>`;
+    row.dataset.id = s.id;
+    row.innerHTML = `<div><span class="dot ${health[s.id] || ""}"></span>${s.label}<br><small>${s.base_url} · ${s.username || ""}</small></div>`;
     const del = document.createElement("button");
     del.textContent = "移除";
     del.onclick = async () => { await invoke("site_remove", { id: s.id }); loadSites(); };
     row.appendChild(del);
     box.appendChild(row);
   }
+  healthDots(sites);   // 后台逐个探活，不阻塞首次渲染
 }
 
 $("test").onclick = test;
@@ -422,3 +440,38 @@ $("doc-run").onclick = async () => {
     $("doc-msg").textContent = "自检失败：" + e;
   }
 };
+
+// ---- 中英切换 ----
+const LANG_DICT = {
+  "站点": "Sites", "添加站点": "Add site", "地址": "Address", "用户名": "Username",
+  "密码": "Password", "保存": "Save", "测试连接": "Test", "移除": "Remove",
+  "创建本地实例": "Create local station", "一键升级": "Upgrade", "远程部署": "Deploy remotely",
+  "本机自检": "Local self-check", "渠道": "Channels", "令牌": "Tokens", "用量": "Usage",
+  "日志": "Logs", "主题": "Theme", "服务器状态": "Server status", "运行自检": "Run check",
+  "还没有站点": "No sites yet", "导出迁移包": "Export bundle",
+};
+let enUI = localStorage.getItem("rhc_lang") === "en";
+function walkLang(node) {
+  if (node.nodeType === 3) {
+    const t = node.textContent.trim();
+    if (LANG_DICT[t] !== undefined) {
+      if (node.__zh === undefined) node.__zh = node.textContent;
+      node.textContent = enUI ? LANG_DICT[t] : node.__zh;
+    }
+    return;
+  }
+  if (node.nodeType !== 1) return;
+  if (node.nodeName === "SCRIPT" || node.nodeName === "STYLE") return;
+  for (const c of node.childNodes) walkLang(c);
+}
+const langBtn = document.createElement("button");
+langBtn.className = "ghost";
+langBtn.textContent = enUI ? "中文" : "EN";
+langBtn.onclick = () => {
+  enUI = !enUI;
+  localStorage.setItem("rhc_lang", enUI ? "en" : "zh");
+  langBtn.textContent = enUI ? "中文" : "EN";
+  walkLang(document.body);
+};
+(document.querySelector("header") || document.body).appendChild(langBtn);
+if (enUI) walkLang(document.body);
