@@ -11,11 +11,12 @@
   header { padding:28px 32px 8px; }
   h1 { font-size:19px; margin:0 0 4px; }
   .sub { color:var(--muted); font-size:13px; }
-  main { display:grid; grid-template-columns: 1fr 340px; gap:20px; padding: 20px 32px 32px; align-items:start; }
-  .card { border:1px solid var(--line); border-radius:12px; padding:18px; }
+  main { display:grid; grid-template-columns: minmax(0,1fr) 340px; gap:20px; padding: 20px 32px 32px; align-items:start; }
+  .card { border:1px solid var(--line); border-radius:12px; padding:18px; min-width:0; overflow-wrap:anywhere; }
   label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
-  input { width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:transparent; color:inherit; font:inherit; }
-  .row { display:flex; gap:10px; margin-top:14px; }
+  input { width:100%; min-width:0; max-width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:transparent; color:inherit; font:inherit; }
+  .row { display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; min-width:0; }
+  .row > * { min-width:0; max-width:100%; }
   button { padding:9px 14px; border-radius:8px; border:1px solid var(--line); background:transparent; color:inherit; font:inherit; cursor:pointer; }
   button.primary { background:var(--brand); border-color:var(--brand); color:#fff; }
   button:disabled { opacity:.5; cursor:not-allowed; }
@@ -39,7 +40,11 @@
 .pane{display:contents}.pane[hidden]{display:none}
 /* 站点列表（含探活状态灯）固定在右列顶部，不随页签内容长度漂移 */
 main > aside{grid-column:2;grid-row:1 / span 2;position:sticky;top:12px;align-self:start}
+/* 内容卡片一律走左列：右列 340px 是侧栏专用，自动排进去会被挤扁 */
+main .pane > section.card{grid-column:1}
 .subblock{margin-top:8px;padding-left:14px;border-left:2px solid var(--line)}
+table{max-width:100%}
+td,th{overflow-wrap:anywhere}
 </style>
 </head>
 <body>
@@ -295,11 +300,19 @@ main > aside{grid-column:2;grid-row:1 / span 2;position:sticky;top:12px;align-se
     </div>
   </section>
 
+  <section class="card" id="env" data-group="sys">
+    <strong>站点环境（HTTP，无需 SSH）</strong>
+    <span class="hint">直接问服务端：版本、Python、可执行路径、数据目录权限、端口、是否有待生效重启</span>
+    <div class="row"><button id="env-load">读取</button><span class="hint" id="env-msg"></span></div>
+    <div id="env-out" style="margin-top:10px;overflow-x:auto"></div>
+  </section>
+
   <section class="card" id="ssh" data-group="sys">
     <strong>远程命令（SSH）</strong>
     <span class="hint">预设动作的命令写死在程序里；自由命令需勾选高级模式、逐条确认，全部记入本地审计（app_data/ssh-audit.jsonl）</span>
     <div class="row">
-      <input id="ssh-host" placeholder="root@1.2.3.4" style="flex:1" />
+      <input id="ssh-host" placeholder="root@1.2.3.4:22 或 myapp.up.railway.app@ssh.railway.com" style="flex:1" />
+      <button id="ssh-from-site" title="从上方「连接已有实例」的地址里取主机名">用站点主机</button>
       <input id="ssh-key" placeholder="私钥路径（免密）" style="flex:1" />
     </div>
     <div class="row" id="ssh-presets"></div>

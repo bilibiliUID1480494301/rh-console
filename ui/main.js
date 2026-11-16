@@ -1238,3 +1238,59 @@ $("ssh-run").onclick = async () => {
     showSshResult(await invoke("ssh_run", { ...target, command }));
   } catch (e) { $("ssh-msg").textContent = "失败：" + e; }
 };
+
+// 从「连接已有实例」的地址推出 SSH 主机名。
+// 注意：管理面端口（如 18802）不是 SSH 端口，所以只取主机名，端口留给用户自己填。
+$("ssh-from-site").onclick = () => {
+  const raw = $("base").value.trim();
+  if (!raw) { $("ssh-msg").textContent = "先在上面填站点地址"; return; }
+  let host = raw.replace(/^[a-z]+:\/\//i, "").split("/")[0];
+  host = host.replace(/^[^@]*@/, "");          // 去掉可能的 user@
+  host = host.split(":")[0];                    // 去掉端口
+  if (!host) { $("ssh-msg").textContent = "看不出主机名"; return; }
+  const user = $("user").value.trim();
+  $("ssh-host").value = user ? `${user}@${host}` : host;
+  $("ssh-msg").textContent = "已带入主机名（SSH 端口默认 22，需要就加 :端口）";
+};
+
+// ---- 站点环境（HTTP）：不需要 SSH，直接问服务端 ----
+async function loadSiteEnv() {
+  if (!invoke) return;
+  $("env-msg").textContent = "读取中…";
+  try {
+    let d = null;
+    let source = "/api/deploy/check";
+    try {
+      d = await adminCall("GET", "/api/deploy/check");
+    } catch (e) {
+      // 老版本可能没有 deploy/check，退回 server/status
+      source = "/api/server/status";
+      d = await adminCall("GET", "/api/server/status");
+    }
+    const rows = [];
+    const add = (label, value) => {
+      if (value === undefined || value === null || value === "") return;
+      rows.push(`<tr><td style="padding:6px 8px;color:#6b7280;white-space:nowrap">${esc(label)}</td>
+        <td style="padding:6px 8px;word-break:break-all">${esc(
+          typeof value === "object" ? JSON.stringify(value) : String(value))}</td></tr>`);
+    };
+    add("版本", d.version);
+    add("API 兼容", d.api_compat);
+    add("Python", d.python);
+    add("可执行文件", d.executable);
+    add("数据目录", d.home);
+    add("目录权限", d.home_mode);
+    add("端口", d.port);
+    add("号池文件", d.pool_exists === undefined ? "" : (d.pool_exists ? "存在" : "缺失"));
+    add("cryptography", d.cryptography === undefined ? "" : (d.cryptography ? "有" : "无"));
+    add("待生效重启", d.restart_pending ? JSON.stringify(d.restart_pending) : "无");
+    add("运行时长（秒）", d.uptime_s ?? d.uptime);
+    add("平台", d.platform);
+    add("渠道数", d.pool_keys);
+    $("env-out").innerHTML = rows.length
+      ? table(["项", "值"], rows)
+      : `<div class="hint">服务端没返回可展示字段：${esc(JSON.stringify(d).slice(0, 200))}</div>`;
+    $("env-msg").textContent = `来自 ${source}`;
+  } catch (e) { $("env-msg").textContent = "读取失败：" + e; }
+}
+$("env-load").onclick = loadSiteEnv;
