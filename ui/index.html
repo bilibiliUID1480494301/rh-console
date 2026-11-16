@@ -118,6 +118,65 @@
     <div id="tk-out" style="margin-top:10px;overflow-x:auto"></div>
   </section>
 
+  <section class="card" id="pol">
+    <strong>接入策略</strong>
+    <span class="hint">拉黑立即生效（按 IP 或客户端身份），优先队列让指定来源排在普通请求之前</span>
+    <div class="row">
+      <select id="pol-kind" style="padding:9px 10px;border-radius:8px;border:1px solid var(--line);background:transparent;color:inherit">
+        <option value="ip">IP</option>
+        <option value="device">客户端身份</option>
+      </select>
+      <input id="pol-value" placeholder="1.2.3.4 或 设备/用户标识" style="flex:1" />
+      <select id="pol-act" style="padding:9px 10px;border-radius:8px;border:1px solid var(--line);background:transparent;color:inherit">
+        <option value="blocked">拉黑</option>
+        <option value="priority">优先</option>
+      </select>
+      <input id="pol-note" placeholder="备注（可选）" style="width:160px" />
+      <button id="pol-add" class="primary">写入</button>
+    </div>
+    <div class="row"><button id="pol-load">刷新</button><span class="hint" id="pol-msg"></span></div>
+    <div id="pol-out" style="margin-top:10px;overflow-x:auto"></div>
+  </section>
+
+  <section class="card" id="code">
+    <strong>兑换码</strong>
+    <span class="hint">明文只在生成时回显一次；作废后不可恢复</span>
+    <div class="row">
+      <input id="code-count" type="number" min="1" max="100" value="5" style="width:90px" placeholder="数量" />
+      <input id="code-credits" type="number" min="1" value="100" style="width:110px" placeholder="额度" />
+      <button id="code-gen" class="primary">生成</button>
+      <button id="code-del-unused">作废全部未用</button>
+      <span class="hint" id="code-msg"></span>
+    </div>
+    <pre id="code-new" class="hint" style="white-space:pre-wrap;margin-top:8px"></pre>
+    <div class="row"><button id="code-load">刷新列表</button></div>
+    <div id="code-out" style="margin-top:10px;overflow-x:auto"></div>
+  </section>
+
+  <section class="card" id="usr">
+    <strong>用户</strong>
+    <span class="hint">改额度 / 停用 / 删除。停用会自动吊销该用户的自建通行证</span>
+    <div class="row"><button id="usr-load">刷新</button><span class="hint" id="usr-msg"></span></div>
+    <div id="usr-out" style="margin-top:10px;overflow-x:auto"></div>
+  </section>
+
+  <section class="card" id="cl">
+    <strong>客户端总览</strong>
+    <span class="hint">按用户与设备聚合的请求来源；不展示下游用户的客户端名（隐私口径）</span>
+    <div class="row"><button id="cl-load">刷新</button><span class="hint" id="cl-msg"></span></div>
+    <div id="cl-out" style="margin-top:10px;overflow-x:auto"></div>
+  </section>
+
+  <section class="card" id="aud">
+    <strong>审计</strong>
+    <span class="hint">管理面写操作的留痕：策略、用户、兑换码、升级等</span>
+    <div class="row">
+      <input id="aud-limit" type="number" min="10" max="500" value="100" style="width:90px" />
+      <button id="aud-load">刷新</button><span class="hint" id="aud-msg"></span>
+    </div>
+    <div id="aud-out" style="margin-top:10px;overflow-x:auto"></div>
+  </section>
+
   <section class="card" id="thm">
     <strong>站点主题</strong>
     <span class="hint">仅接受 #rgb / #rrggbb 颜色；非颜色会被丢弃</span>

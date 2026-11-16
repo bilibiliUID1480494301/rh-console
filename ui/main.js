@@ -627,3 +627,226 @@ async function runDeploy() {
 }
 const depBtn = document.getElementById("dep-run");
 if (depBtn) depBtn.onclick = runDeploy;
+
+// ---- 接入策略 / 兑换码 / 用户 / 客户端 / 审计 ----
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function table(headers, rows) {
+  if (!rows.length) return '<div class="hint">暂无数据</div>';
+  const head = headers.map((h) =>
+    `<th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)">${h}</th>`).join("");
+  return `<table style="border-collapse:collapse;width:100%;font-size:13px">
+    <thead><tr>${head}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
+}
+
+async function adminCall(method, path, body) {
+  return invoke("admin_call", {
+    baseUrl: $("base").value, username: $("user").value, password: $("pass").value,
+    method, path, body: body ?? null,
+  });
+}
+
+// 策略：拉黑立即生效，优先队列让指定来源排在普通请求之前
+async function loadPolicy() {
+  if (!invoke) return;
+  $("pol-msg").textContent = "读取中…";
+  try {
+    renderPolicy(await adminCall("GET", "/api/policy"));
+  } catch (e) { $("pol-msg").textContent = "读取失败：" + e; }
+}
+
+function renderPolicy(state) {
+  const boxes = state || {};
+  const rows = [];
+  for (const kind of ["ips", "devices"]) {
+    for (const [value, entry] of Object.entries(boxes[kind] || {})) {
+      const tag = entry.blocked ? '<span style="color:#d0483c">拉黑</span>'
+        : entry.priority ? '<span style="color:#2e9e6b">优先</span>' : "-";
+      rows.push(`<tr>
+        <td style="padding:6px 8px">${kind === "ips" ? "IP" : "身份"}</td>
+        <td style="padding:6px 8px">${esc(value)}</td>
+        <td style="padding:6px 8px">${tag}</td>
+        <td style="padding:6px 8px">${esc(entry.note || "")}</td>
+        <td style="padding:6px 8px"><button class="q" data-pol-remove="${esc(value)}" data-pol-kind="${kind === "ips" ? "ip" : "device"}">移除</button></td>
+      </tr>`);
+    }
+  }
+  $("pol-out").innerHTML = table(["类型", "值", "状态", "备注", ""], rows);
+  $("pol-msg").textContent = rows.length ? `${rows.length} 条策略` : "没有策略（默认全部放行）";
+}
+
+$("pol-load").onclick = loadPolicy;
+$("pol-add").onclick = async () => {
+  const value = $("pol-value").value.trim();
+  if (!value) { $("pol-msg").textContent = "值不能为空"; return; }
+  const act = $("pol-act").value;
+  const body = { kind: $("pol-kind").value, value, action: "set" };
+  body[act] = true;                       // blocked / priority，互斥由后端裁决
+  if ($("pol-note").value.trim()) body.note = $("pol-note").value.trim();
+  $("pol-msg").textContent = "写入中…";
+  try {
+    renderPolicy(await adminCall("POST", "/api/policy", body));
+    $("pol-value").value = "";
+    $("pol-note").value = "";
+    $("pol-msg").textContent = "已写入，下一请求即生效";
+  } catch (e) { $("pol-msg").textContent = "写入失败：" + e; }
+};
+$("pol-out").addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("[data-pol-remove]");
+  if (!btn) return;
+  try {
+    renderPolicy(await adminCall("POST", "/api/policy", {
+      kind: btn.dataset.polKind, value: btn.dataset.polRemove, action: "remove",
+    }));
+    $("pol-msg").textContent = "已移除";
+  } catch (e) { $("pol-msg").textContent = "移除失败：" + e; }
+});
+
+// 兑换码：明文只在生成时回显一次
+async function loadCodes() {
+  if (!invoke) return;
+  $("code-msg").textContent = "读取中…";
+  try {
+    const data = await adminCall("GET", "/api/codes");
+    const codes = data.codes || [];
+    const rows = codes.map((c) => `<tr>
+      <td style="padding:6px 8px;font-family:ui-monospace,monospace">${esc(c.code)}</td>
+      <td style="padding:6px 8px">${c.credits}</td>
+      <td style="padding:6px 8px">${c.used_by ? "已用 · " + esc(c.used_by) : "未用"}</td>
+      <td style="padding:6px 8px">${c.created_at ? new Date(c.created_at * 1000).toLocaleString() : "-"}</td>
+      <td style="padding:6px 8px">${c.used_by ? "" : `<button class="q" data-code-del="${esc(c.code)}">作废</button>`}</td>
+    </tr>`);
+    $("code-out").innerHTML = table(["兑换码", "额度", "状态", "创建时间", ""], rows);
+    $("code-msg").textContent = `${codes.length} 个`;
+  } catch (e) { $("code-msg").textContent = "读取失败：" + e; }
+}
+
+$("code-load").onclick = loadCodes;
+$("code-gen").onclick = async () => {
+  const count = parseInt($("code-count").value, 10) || 1;
+  const credits = parseInt($("code-credits").value, 10) || 100;
+  $("code-msg").textContent = "生成中…";
+  try {
+    const data = await adminCall("POST", "/api/codes", { count, credits });
+    const fresh = (data.codes || []).map((c) => c.code).join("\n");
+    $("code-new").textContent = fresh ? "本次生成（只显示一次）：\n" + fresh : "没有生成";
+    $("code-msg").textContent = `已生成 ${(data.codes || []).length} 个`;
+    await loadCodes();
+  } catch (e) { $("code-msg").textContent = "生成失败：" + e; }
+};
+$("code-del-unused").onclick = async () => {
+  if (!confirm("作废全部未使用的兑换码？不可恢复")) return;
+  try {
+    const r = await adminCall("POST", "/api/codes/destroy", { codes: [], all_unused: true });
+    $("code-msg").textContent = `已作废 ${r.removed} 个`;
+    await loadCodes();
+  } catch (e) { $("code-msg").textContent = "作废失败：" + e; }
+};
+$("code-out").addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("[data-code-del]");
+  if (!btn) return;
+  try {
+    await adminCall("POST", "/api/codes/destroy", { codes: [btn.dataset.codeDel] });
+    await loadCodes();
+  } catch (e) { $("code-msg").textContent = "作废失败：" + e; }
+});
+
+// 用户：额度 / 停用 / 删除
+async function loadUsers() {
+  if (!invoke) return;
+  $("usr-msg").textContent = "读取中…";
+  try {
+    const data = await adminCall("GET", "/api/users");
+    const users = data.users || [];
+    const rows = users.map((u) => `<tr>
+      <td style="padding:6px 8px">${esc(u.username)}</td>
+      <td style="padding:6px 8px">${esc(u.role)}</td>
+      <td style="padding:6px 8px">${u.quota < 0 ? "不限" : u.quota}</td>
+      <td style="padding:6px 8px">${u.used ?? 0}</td>
+      <td style="padding:6px 8px">${u.enabled ? "启用" : '<span style="color:#d0483c">停用</span>'}</td>
+      <td style="padding:6px 8px">${esc(u.group || "-")}</td>
+      <td style="padding:6px 8px">
+        <button class="q" data-usr-quota="${esc(u.username)}">改额度</button>
+        <button class="q" data-usr-toggle="${esc(u.username)}" data-usr-enabled="${u.enabled ? 1 : 0}">${u.enabled ? "停用" : "启用"}</button>
+        <button class="q" data-usr-del="${esc(u.username)}">删除</button>
+      </td></tr>`);
+    $("usr-out").innerHTML = table(["用户", "角色", "额度", "已用", "状态", "分组", "操作"], rows);
+    $("usr-msg").textContent =
+      `${users.length} 个用户 · 允许注册：${data.allow_register ? "是" : "否"}`;
+  } catch (e) { $("usr-msg").textContent = "读取失败：" + e; }
+}
+
+$("usr-load").onclick = loadUsers;
+$("usr-out").addEventListener("click", async (ev) => {
+  const q = ev.target.closest("[data-usr-quota]");
+  const t = ev.target.closest("[data-usr-toggle]");
+  const d = ev.target.closest("[data-usr-del]");
+  try {
+    if (q) {
+      const raw = prompt(`给 ${q.dataset.usrQuota} 设置额度（-1 = 不限）`, "");
+      if (raw === null) return;
+      const quota = parseInt(raw, 10);
+      if (Number.isNaN(quota)) { $("usr-msg").textContent = "额度必须是整数"; return; }
+      await adminCall("PUT", `/api/users/${encodeURIComponent(q.dataset.usrQuota)}`, { quota });
+    } else if (t) {
+      await adminCall("PUT", `/api/users/${encodeURIComponent(t.dataset.usrToggle)}`,
+        { enabled: t.dataset.usrEnabled !== "1" });
+    } else if (d) {
+      if (!confirm(`删除用户 ${d.dataset.usrDel}？不可恢复`)) return;
+      await adminCall("DELETE", `/api/users/${encodeURIComponent(d.dataset.usrDel)}`, null);
+    } else return;
+    await loadUsers();
+  } catch (e) { $("usr-msg").textContent = "操作失败：" + e; }
+});
+
+// 客户端总览：按用户/设备聚合；刻意不展示下游用户的客户端名（隐私口径：粒度到用户）
+async function loadClients() {
+  if (!invoke) return;
+  $("cl-msg").textContent = "读取中…";
+  try {
+    const data = await adminCall("GET", "/api/clients");
+    const list = data.clients || [];
+    const rows = list.map((c) => `<tr>
+      <td style="padding:6px 8px">${c.source === "app" ? "自定义 App" : "直连 API"}</td>
+      <td style="padding:6px 8px">${esc(c.user || "-")}</td>
+      <td style="padding:6px 8px">${esc(c.device || "-")}</td>
+      <td style="padding:6px 8px">${esc(c.ver || "-")}</td>
+      <td style="padding:6px 8px">${esc(c.token || "-")}</td>
+      <td style="padding:6px 8px">${c.today}</td>
+      <td style="padding:6px 8px">${c.failed}</td>
+      <td style="padding:6px 8px">${c.online ? '<span style="color:#2e9e6b">在线</span>' : "离线"}</td>
+    </tr>`);
+    $("cl-out").innerHTML = table(
+      ["来源", "用户", "设备", "版本", "令牌", "今日请求", "失败", "状态"], rows);
+    const s = data.summary || {};
+    $("cl-msg").textContent =
+      `App 设备 ${s.app_devices ?? 0} · 直连来源 ${s.api_sources ?? 0}` +
+      ` · 在线 ${s.online ?? 0} · 今日 ${s.today_requests ?? 0} 次`;
+  } catch (e) { $("cl-msg").textContent = "读取失败：" + e; }
+}
+$("cl-load").onclick = loadClients;
+
+// 审计：管理面写操作留痕
+async function loadAudit() {
+  if (!invoke) return;
+  $("aud-msg").textContent = "读取中…";
+  try {
+    const limit = parseInt($("aud-limit").value, 10) || 100;
+    const data = await adminCall("GET", `/api/audit?limit=${limit}`);
+    const entries = (data.entries || []).slice().reverse();
+    const rows = entries.map((e) => {
+      const detail = Object.entries(e)
+        .filter(([k]) => !["ts", "at", "event", "action"].includes(k))
+        .map(([k, v]) => `${k}=${v}`).join(" · ");
+      return `<tr>
+        <td style="padding:6px 8px;white-space:nowrap">${e.ts ? new Date(e.ts * 1000).toLocaleString() : "-"}</td>
+        <td style="padding:6px 8px">${esc(e.event || e.action || "-")}</td>
+        <td style="padding:6px 8px;word-break:break-all">${esc(detail)}</td>
+      </tr>`;
+    });
+    $("aud-out").innerHTML = table(["时间", "事件", "详情"], rows);
+    $("aud-msg").textContent = `${entries.length} 条`;
+  } catch (e) { $("aud-msg").textContent = "读取失败：" + e; }
+}
+$("aud-load").onclick = loadAudit;

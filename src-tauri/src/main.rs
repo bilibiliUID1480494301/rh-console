@@ -189,6 +189,51 @@ async fn admin_post(
 }
 
 #[tauri::command]
+async fn admin_call(
+    base_url: String,
+    username: String,
+    password: String,
+    method: String,
+    path: String,
+    body: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    // 只放行 /api/ 下的路径：这个命令拿着管理员 cookie，不能变成任意请求器
+    if !path.starts_with("/api/") {
+        return Err("只允许 /api/ 下的路径".into());
+    }
+    let verb = method.to_uppercase();
+    if !matches!(verb.as_str(), "GET" | "POST" | "PUT" | "DELETE") {
+        return Err(format!("不支持的方法 {verb}"));
+    }
+    let base = base_of(&base_url);
+    let cookie = login_cookie(&base, &username, &password).await?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let url = format!("{base}{path}");
+    let mut req = match verb.as_str() {
+        "GET" => client.get(&url),
+        "POST" => client.post(&url),
+        "PUT" => client.put(&url),
+        _ => client.delete(&url),
+    }
+    .header("Cookie", cookie);
+    if verb != "GET" {
+        if let Some(payload) = body {
+            req = req.json(&payload);
+        }
+    }
+    let resp = req.send().await.map_err(|e| format!("请求失败：{e}"))?;
+    let status = resp.status().as_u16();
+    let text = resp.text().await.unwrap_or_default();
+    if status != 200 {
+        return Err(format!("HTTP {status}：{text}"));
+    }
+    serde_json::from_str(&text).or_else(|_| Ok(serde_json::json!({"raw": text})))
+}
+
+#[tauri::command]
 fn doctor_local() -> Result<serde_json::Value, String> {
     // doctor 只对本机有意义（查的是本机 Python/端口/数据目录），远程实例不该由它代跑
     let py = probe_cmd("python", &["--version"]).map(|_| "python".to_string())
@@ -755,6 +800,7 @@ fn main() {
             plugin_costs,
             admin_get,
             admin_post,
+            admin_call,
             doctor_local,
             remote_deploy,
             site_remove,
