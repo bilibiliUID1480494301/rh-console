@@ -4,47 +4,117 @@
 <meta charset="utf-8" />
 <title>relay-hub Console</title>
 <style>
-  :root { color-scheme: light dark; --bg:#fff; --fg:#111; --muted:#6b7280; --line:#e5e7eb; --brand:#2563eb; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#111214; --fg:#e8e8ea; --muted:#9ca3af; --line:#2a2c30; } }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.55 system-ui, "Segoe UI", sans-serif; }
-  header { padding:28px 32px 8px; }
-  h1 { font-size:19px; margin:0 0 4px; }
-  .sub { color:var(--muted); font-size:13px; }
-  main { display:grid; grid-template-columns: minmax(0,1fr) 340px; gap:20px; padding: 20px 32px 32px; align-items:start; }
-  .card { border:1px solid var(--line); border-radius:12px; padding:18px; min-width:0; overflow-wrap:anywhere; }
-  label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
-  input { width:100%; min-width:0; max-width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:transparent; color:inherit; font:inherit; }
-  .row { display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; min-width:0; }
-  .row > * { min-width:0; max-width:100%; }
-  button { padding:9px 14px; border-radius:8px; border:1px solid var(--line); background:transparent; color:inherit; font:inherit; cursor:pointer; }
-  button.primary { background:var(--brand); border-color:var(--brand); color:#fff; }
-  button:disabled { opacity:.5; cursor:not-allowed; }
-  .hint { color:var(--muted); font-size:12px; margin-top:8px; }
-  #probe { margin-top:12px; font-size:13px; min-height:20px; }
-  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; background:#9ca3af; }
-  .dot.online{background:#16a34a} .dot.auth_failed{background:#dc2626} .dot.unreachable{background:#9ca3af}
-  .dot.incompatible{background:#d97706} .dot.third_party{background:#7c3aed}
-  .site { display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); }
-  .site:last-child { border-bottom:0; }
-  .site small { color:var(--muted); }
-  .q { border:0; background:transparent; color:var(--muted); cursor:pointer; font-size:12px; }
-  details { margin-top:14px; }
-  details summary { cursor:pointer; color:var(--muted); font-size:12px; }
+  :root{
+    color-scheme: light dark;
+    --bg:#fff; --fg:#111827; --muted:#6b7280; --line:#e5e7eb; --line-soft:#f1f3f5;
+    --brand:#2563eb; --brand-weak:#eff4ff;
+    --ok:#16815a; --warn:#b5770a; --bad:#c0392b;
+    --r-sm:6px; --r-md:9px; --r-lg:12px;
+    --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:22px;
+    --ctl:34px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#111214; --fg:#e8e8ea; --muted:#9aa1ab; --line:#2a2c30; --line-soft:#1c1e22;
+           --brand:#4d84f5; --brand-weak:#1a2334; --ok:#3fae83; --warn:#d79a2b; --bad:#e06c5f; }
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--fg);
+        font:13.5px/1.6 system-ui, "Segoe UI", sans-serif; }
 
-.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#c3c8d0;margin-right:7px;vertical-align:middle}
-.dot.ok{background:#2e9e6b}.dot.warn{background:#d4930d}.dot.bad{background:#d0483c}
-.site{display:flex;justify-content:space-between;align-items:center;gap:8px}
-.tabs{display:flex;gap:6px;padding:0 32px 6px;flex-wrap:wrap}
-.tabs button[aria-selected="true"]{background:var(--brand);border-color:var(--brand);color:#fff}
-.pane{display:contents}.pane[hidden]{display:none}
-/* 站点列表（含探活状态灯）固定在右列顶部，不随页签内容长度漂移 */
-main > aside{grid-column:2;grid-row:1 / span 2;position:sticky;top:12px;align-self:start}
-/* 内容卡片一律走左列：右列 340px 是侧栏专用，自动排进去会被挤扁 */
-main .pane > section.card{grid-column:1}
-.subblock{margin-top:8px;padding-left:14px;border-left:2px solid var(--line)}
-table{max-width:100%}
-td,th{overflow-wrap:anywhere}
+  header{ padding:var(--sp-5) 26px var(--sp-2); }
+  h1{ font-size:17px; font-weight:600; margin:0 0 var(--sp-1); letter-spacing:.2px; }
+  .sub{ color:var(--muted); font-size:12.5px; display:flex; align-items:center;
+        gap:var(--sp-3); flex-wrap:wrap; }
+  #agg{ display:inline-flex; align-items:center; gap:6px; }
+
+  .tabs{ display:flex; gap:2px; padding:0 26px; margin-bottom:var(--sp-3);
+         border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .tabs button{ border:0; border-bottom:2px solid transparent; border-radius:0;
+                background:transparent; padding:9px 12px; font-size:13px;
+                color:var(--muted); height:auto; }
+  .tabs button:hover{ color:var(--fg); border-color:transparent; }
+  .tabs button[aria-selected="true"]{ color:var(--brand); border-bottom-color:var(--brand);
+                background:transparent; font-weight:600; }
+
+  main{ display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:var(--sp-4);
+        padding:0 26px var(--sp-5); align-items:start; }
+  .pane{ display:contents; } .pane[hidden]{ display:none; }
+  main .pane > section.card{ grid-column:1; }
+  main > aside{ grid-column:2; grid-row:1 / span 2; position:sticky;
+                top:var(--sp-3); align-self:start; }
+
+  .card{ border:1px solid var(--line); border-radius:var(--r-lg); padding:var(--sp-4);
+         min-width:0; overflow-wrap:anywhere; background:var(--bg); }
+  .card + .card{ margin-top:var(--sp-3); }
+  .card > strong{ display:block; font-size:13.5px; font-weight:600; letter-spacing:.2px; }
+  .card > strong + .hint{ margin-top:3px; }
+  .card > .row:first-of-type{ margin-top:var(--sp-3); }
+
+  label{ display:block; font-size:11.5px; color:var(--muted); margin:var(--sp-3) 0 var(--sp-1); }
+  input,select,textarea{ width:100%; min-width:0; max-width:100%; height:var(--ctl);
+         padding:0 10px; border:1px solid var(--line); border-radius:var(--r-md);
+         background:transparent; color:inherit; font:inherit; }
+  textarea{ height:auto; padding:8px 10px; line-height:1.5; resize:vertical; }
+  input:focus,select:focus,textarea:focus{ outline:none; border-color:var(--brand);
+         box-shadow:0 0 0 3px var(--brand-weak); }
+  input:disabled{ opacity:.55; }
+
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:0 var(--sp-3); }
+  @media (max-width:900px){ .grid2{ grid-template-columns:1fr; } }
+  .row{ display:flex; gap:var(--sp-2); margin-top:var(--sp-3);
+        flex-wrap:wrap; min-width:0; align-items:center; }
+  .row > *{ min-width:0; max-width:100%; }
+
+  button{ height:var(--ctl); padding:0 12px; border-radius:var(--r-md);
+          border:1px solid var(--line); background:transparent; color:inherit;
+          font:inherit; font-size:13px; cursor:pointer;
+          transition:background .12s,border-color .12s; }
+  button:hover{ border-color:var(--muted); }
+  button.primary{ background:var(--brand); border-color:var(--brand); color:#fff; }
+  button.primary:hover{ filter:brightness(1.06); }
+  button:disabled{ opacity:.5; cursor:not-allowed; }
+  button.q{ height:auto; padding:2px 6px; border:0; color:var(--muted); font-size:12px;
+            text-decoration:underline; text-underline-offset:2px; }
+  button.q:hover{ color:var(--brand); border-color:transparent; }
+  td button.q{ padding:0 4px; }
+  /* 语言切换这类小控件别占标准按钮高度 */
+  button.ghost{ height:auto; padding:2px 9px; font-size:11.5px; color:var(--muted);
+                border-radius:999px; }
+
+  .hint{ color:var(--muted); font-size:12px; }
+  .row .hint{ margin:0; }
+
+  .dot{ display:inline-block; width:7px; height:7px; border-radius:50%;
+        background:var(--muted); margin-right:6px; vertical-align:middle; }
+  .dot.ok,.dot.online{ background:var(--ok); }
+  .dot.warn,.dot.incompatible{ background:var(--warn); }
+  .dot.bad,.dot.auth_failed{ background:var(--bad); }
+  .dot.unreachable{ background:var(--muted); }
+  .dot.third_party{ background:#7c3aed; }
+
+  .site{ display:flex; justify-content:space-between; align-items:center; gap:var(--sp-2);
+         padding:var(--sp-2) 0; border-bottom:1px solid var(--line-soft); }
+  .site:last-child{ border-bottom:0; }
+  .site small{ color:var(--muted); font-size:11.5px; }
+
+  details{ margin-top:var(--sp-3); border-top:1px solid var(--line-soft); padding-top:var(--sp-2); }
+  details summary{ cursor:pointer; color:var(--muted); font-size:12px; }
+  details[open] summary{ margin-bottom:var(--sp-2); }
+  .subblock{ margin-top:var(--sp-2); padding-left:12px; border-left:2px solid var(--line); }
+
+  table{ width:100%; max-width:100%; border-collapse:collapse; font-size:12.5px; }
+  th{ text-align:left; font-weight:600; color:var(--muted); font-size:11.5px;
+      padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  td{ padding:6px 8px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  tbody tr:hover td{ background:var(--line-soft); }
+  td,th{ overflow-wrap:anywhere; }
+  table.compact td, table.compact th{ padding:4px 6px; font-size:12px; }
+  td.k{ color:var(--muted); white-space:nowrap; }
+  td.mono{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+  td.nowrap{ white-space:nowrap; }
+
+  #probe{ margin-top:var(--sp-2); font-size:13px; min-height:20px; }
+  pre{ margin:0; font-size:12px; line-height:1.5; }
 </style>
 </head>
 <body>
@@ -59,10 +129,16 @@ td,th{overflow-wrap:anywhere}
 <main>
   <section class="card" id="conn-card" data-group="conn">
     <strong>连接已有实例</strong>
-    <label>地址</label>
-    <input id="base" placeholder="http://127.0.0.1:18802 或 https://your.site" />
-    <label>管理员账号</label>
-    <input id="user" autocomplete="username" placeholder="用户名" />
+    <div class="grid2">
+      <div>
+        <label>地址</label>
+        <input id="base" placeholder="http://127.0.0.1:18802 或 https://your.site" />
+      </div>
+      <div>
+        <label>管理员账号</label>
+        <input id="user" autocomplete="username" placeholder="用户名" />
+      </div>
+    </div>
     <label>密码</label>
     <input id="pass" type="password" autocomplete="current-password" placeholder="密码" />
     <div class="row">
@@ -311,9 +387,9 @@ td,th{overflow-wrap:anywhere}
     <strong>远程命令（SSH）</strong>
     <span class="hint">预设动作的命令写死在程序里；自由命令需勾选高级模式、逐条确认，全部记入本地审计（app_data/ssh-audit.jsonl）</span>
     <div class="row">
-      <input id="ssh-host" placeholder="root@1.2.3.4:22 或 myapp.up.railway.app@ssh.railway.com" style="flex:1" />
+      <input id="ssh-host" placeholder="root@1.2.3.4:22 或 myapp.up.railway.app@ssh.railway.com" style="flex:2 1 260px" />
+      <input id="ssh-key" placeholder="私钥路径（免密）" style="flex:2 1 220px" />
       <button id="ssh-from-site" title="从上方「连接已有实例」的地址里取主机名">用站点主机</button>
-      <input id="ssh-key" placeholder="私钥路径（免密）" style="flex:1" />
     </div>
     <div class="row" id="ssh-presets"></div>
     <div class="row">

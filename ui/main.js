@@ -6,8 +6,8 @@ const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
 function table(headers, rows) {
   if (!rows.length) return '<div class="hint">暂无数据</div>';
   const head = headers.map((h) =>
-    `<th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)">${h}</th>`).join("");
-  return `<table style="border-collapse:collapse;width:100%;font-size:13px">
+    `<th>${h}</th>`).join("");
+  return `<table>
     <thead><tr>${head}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
 }
 
@@ -236,7 +236,7 @@ function renderPlugins() {
     <td>${r.plugin}</td><td>${r.requests}</td><td>${r.failed}</td>
     <td>${r.fail_rate}%</td><td>${r.tokens_in}</td><td>${r.tokens_out}</td>
     <td>${r.avg_latency_ms}ms</td><td>${r.version || "-"}</td></tr>`).join("");
-  box.innerHTML = `<table style="border-collapse:collapse;width:100%;font-size:13px">
+  box.innerHTML = `<table>
     <thead>${head}</thead><tbody>${body}</tbody></table>`;
 }
 
@@ -284,7 +284,7 @@ function renderChannels(keys) {
     <td>${k.cooling_down_for > 0 ? "冷却 " + Math.round(k.cooling_down_for) + "s"
             : (k.enabled === false ? "已停用" : (k.available === false ? "不可用" : "正常"))}</td>
     <td>${(k.models || []).length}</td></tr>`).join("");
-  box.innerHTML = `<table style="border-collapse:collapse;width:100%;font-size:13px">
+  box.innerHTML = `<table>
     <thead><tr><th>ID</th><th>标签</th><th>协议</th><th>状态</th><th>模型数</th></tr></thead>
     <tbody>${rows}</tbody></table>`;
 }
@@ -304,7 +304,7 @@ async function loadTokens() {
     $("tk-msg").textContent = `${list.length} 个令牌`;
     const box = $("tk-out");
     if (!list.length) { box.innerHTML = '<div class="hint">没有令牌</div>'; return; }
-    box.innerHTML = `<table style="border-collapse:collapse;width:100%;font-size:13px">
+    box.innerHTML = `<table>
       <thead><tr><th>名称</th><th>尾号</th><th>状态</th><th>已用</th></tr></thead><tbody>${
         list.map((t) => `<tr><td>${esc(t.name || t.token_id)}</td><td>…${esc(t.tail || "")}</td>
           <td>${t.disabled ? "停用" : "启用"}</td><td>${t.used ?? t.requests ?? "-"}</td></tr>`).join("")
@@ -386,8 +386,8 @@ async function loadUsage() {
     };
     walk(data, "");
     $("usg-msg").textContent = `${flat.length} 个字段`;
-    $("usg-out").innerHTML = `<table style="border-collapse:collapse;width:100%;font-size:13px">
-      <tbody>${flat.map(([k, v]) => `<tr><td style="color:#6b7280;padding-right:12px">${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</tbody></table>`;
+    $("usg-out").innerHTML = `<table>
+      <tbody>${flat.map(([k, v]) => `<tr><td class="k">${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</tbody></table>`;
   } catch (e) {
     $("usg-msg").textContent = "读取失败：" + e;
   }
@@ -407,10 +407,10 @@ async function loadRequests() {
     const box = $("log-out");
     if (!rows.length) { box.innerHTML = '<div class="hint">暂无记录</div>'; return; }
     const cols = Object.keys(rows[0]).slice(0, 8);
-    box.innerHTML = `<table style="border-collapse:collapse;width:100%;font-size:12px">
-      <thead><tr>${cols.map((c) => `<th style="text-align:left;padding:4px 8px">${esc(c)}</th>`).join("")}</tr></thead>
+    box.innerHTML = `<table class="compact">
+      <thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead>
       <tbody>${rows.slice(0, 50).map((r) => `<tr>${cols.map((c) =>
-        `<td style="padding:4px 8px">${esc(String(r[c] ?? ""))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+        `<td>${esc(String(r[c] ?? ""))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
   } catch (e) {
     $("log-msg").textContent = "读取失败：" + e;
   }
@@ -493,7 +493,7 @@ $("doc-run").onclick = async () => {
     const list = Array.isArray(checks) ? checks : (checks.checks || []);
     const bad = list.filter((c) => !c.ok);
     $("doc-msg").textContent = bad.length ? `${bad.length} 项未通过` : "全部通过";
-    $("doc-out").innerHTML = `<table style="border-collapse:collapse;width:100%;font-size:13px">
+    $("doc-out").innerHTML = `<table>
       <tbody>${list.map((c) => `<tr>
         <td style="width:22px">${c.ok ? "✓" : "✗"}</td>
         <td style="width:150px">${c.name || ""}</td>
@@ -695,11 +695,11 @@ function renderPolicy(state) {
       const tag = entry.blocked ? '<span style="color:#d0483c">拉黑</span>'
         : entry.priority ? '<span style="color:#2e9e6b">优先</span>' : "-";
       rows.push(`<tr>
-        <td style="padding:6px 8px">${kind === "ips" ? "IP" : "身份"}</td>
-        <td style="padding:6px 8px">${esc(value)}</td>
-        <td style="padding:6px 8px">${tag}</td>
-        <td style="padding:6px 8px">${esc(entry.note || "")}</td>
-        <td style="padding:6px 8px"><button class="q" data-pol-remove="${esc(value)}" data-pol-kind="${kind === "ips" ? "ip" : "device"}">移除</button></td>
+        <td>${kind === "ips" ? "IP" : "身份"}</td>
+        <td>${esc(value)}</td>
+        <td>${tag}</td>
+        <td>${esc(entry.note || "")}</td>
+        <td><button class="q" data-pol-remove="${esc(value)}" data-pol-kind="${kind === "ips" ? "ip" : "device"}">移除</button></td>
       </tr>`);
     }
   }
@@ -742,11 +742,11 @@ async function loadCodes() {
     const data = await adminCall("GET", "/api/codes");
     const codes = data.codes || [];
     const rows = codes.map((c) => `<tr>
-      <td style="padding:6px 8px;font-family:ui-monospace,monospace">${esc(c.code)}</td>
-      <td style="padding:6px 8px">${c.credits}</td>
-      <td style="padding:6px 8px">${c.used_by ? "已用 · " + esc(c.used_by) : "未用"}</td>
-      <td style="padding:6px 8px">${c.created_at ? new Date(c.created_at * 1000).toLocaleString() : "-"}</td>
-      <td style="padding:6px 8px">${c.used_by ? "" : `<button class="q" data-code-del="${esc(c.code)}">作废</button>`}</td>
+      <td class="mono">${esc(c.code)}</td>
+      <td>${c.credits}</td>
+      <td>${c.used_by ? "已用 · " + esc(c.used_by) : "未用"}</td>
+      <td>${c.created_at ? new Date(c.created_at * 1000).toLocaleString() : "-"}</td>
+      <td>${c.used_by ? "" : `<button class="q" data-code-del="${esc(c.code)}">作废</button>`}</td>
     </tr>`);
     $("code-out").innerHTML = table(["兑换码", "额度", "状态", "创建时间", ""], rows);
     $("code-msg").textContent = `${codes.length} 个`;
@@ -791,13 +791,13 @@ async function loadUsers() {
     const data = await adminCall("GET", "/api/users");
     const users = data.users || [];
     const rows = users.map((u) => `<tr>
-      <td style="padding:6px 8px">${esc(u.username)}</td>
-      <td style="padding:6px 8px">${esc(u.role)}</td>
-      <td style="padding:6px 8px">${u.quota < 0 ? "不限" : u.quota}</td>
-      <td style="padding:6px 8px">${u.used ?? 0}</td>
-      <td style="padding:6px 8px">${u.enabled ? "启用" : '<span style="color:#d0483c">停用</span>'}</td>
-      <td style="padding:6px 8px">${esc(u.group || "-")}</td>
-      <td style="padding:6px 8px">
+      <td>${esc(u.username)}</td>
+      <td>${esc(u.role)}</td>
+      <td>${u.quota < 0 ? "不限" : u.quota}</td>
+      <td>${u.used ?? 0}</td>
+      <td>${u.enabled ? "启用" : '<span style="color:#d0483c">停用</span>'}</td>
+      <td>${esc(u.group || "-")}</td>
+      <td>
         <button class="q" data-usr-quota="${esc(u.username)}">改额度</button>
         <button class="q" data-usr-toggle="${esc(u.username)}" data-usr-enabled="${u.enabled ? 1 : 0}">${u.enabled ? "停用" : "启用"}</button>
         <button class="q" data-usr-del="${esc(u.username)}">删除</button>
@@ -839,14 +839,14 @@ async function loadClients() {
     const data = await adminCall("GET", "/api/clients");
     const list = data.clients || [];
     const rows = list.map((c) => `<tr>
-      <td style="padding:6px 8px">${c.source === "app" ? "自定义 App" : "直连 API"}</td>
-      <td style="padding:6px 8px">${esc(c.user || "-")}</td>
-      <td style="padding:6px 8px">${esc(c.device || "-")}</td>
-      <td style="padding:6px 8px">${esc(c.ver || "-")}</td>
-      <td style="padding:6px 8px">${esc(c.token || "-")}</td>
-      <td style="padding:6px 8px">${c.today}</td>
-      <td style="padding:6px 8px">${c.failed}</td>
-      <td style="padding:6px 8px">${c.online ? '<span style="color:#2e9e6b">在线</span>' : "离线"}</td>
+      <td>${c.source === "app" ? "自定义 App" : "直连 API"}</td>
+      <td>${esc(c.user || "-")}</td>
+      <td>${esc(c.device || "-")}</td>
+      <td>${esc(c.ver || "-")}</td>
+      <td>${esc(c.token || "-")}</td>
+      <td>${c.today}</td>
+      <td>${c.failed}</td>
+      <td>${c.online ? '<span style="color:#2e9e6b">在线</span>' : "离线"}</td>
     </tr>`);
     $("cl-out").innerHTML = table(
       ["来源", "用户", "设备", "版本", "令牌", "今日请求", "失败", "状态"], rows);
@@ -871,9 +871,9 @@ async function loadAudit() {
         .filter(([k]) => !["ts", "at", "event", "action"].includes(k))
         .map(([k, v]) => `${k}=${v}`).join(" · ");
       return `<tr>
-        <td style="padding:6px 8px;white-space:nowrap">${e.ts ? new Date(e.ts * 1000).toLocaleString() : "-"}</td>
-        <td style="padding:6px 8px">${esc(e.event || e.action || "-")}</td>
-        <td style="padding:6px 8px;word-break:break-all">${esc(detail)}</td>
+        <td class="nowrap">${e.ts ? new Date(e.ts * 1000).toLocaleString() : "-"}</td>
+        <td>${esc(e.event || e.action || "-")}</td>
+        <td>${esc(detail)}</td>
       </tr>`;
     });
     $("aud-out").innerHTML = table(["时间", "事件", "详情"], rows);
@@ -952,11 +952,11 @@ $("fp-run").onclick = async () => {
     const rows = (Array.isArray(report) ? report : []).map((c) => {
       const changed = (c.added || []).length + (c.removed || []).length + (c.changed || []).length;
       return `<tr>
-        <td style="padding:6px 8px">${esc(c.key_id || "-")}</td>
-        <td style="padding:6px 8px">${c.ok ? "正常" : '<span style="color:#d0483c">失败</span>'}</td>
-        <td style="padding:6px 8px">${(c.count ?? "-")}</td>
-        <td style="padding:6px 8px">${changed ? '<span style="color:#d4930d">有变动</span>' : "无变动"}</td>
-        <td style="padding:6px 8px">${esc(c.error || "")}</td>
+        <td>${esc(c.key_id || "-")}</td>
+        <td>${c.ok ? "正常" : '<span style="color:#d0483c">失败</span>'}</td>
+        <td>${(c.count ?? "-")}</td>
+        <td>${changed ? '<span style="color:#d4930d">有变动</span>' : "无变动"}</td>
+        <td>${esc(c.error || "")}</td>
       </tr>`;
     });
     $("fp-out").innerHTML = rows.length
@@ -1046,7 +1046,7 @@ async function loadOversell() {
       ["预警阈值（天）", d.warn_days ?? "-"],
     ];
     $("ovs-out").innerHTML = table(["指标", "值"],
-      rows.map(([k, v]) => `<tr><td style="padding:6px 8px">${esc(k)}</td><td style="padding:6px 8px">${esc(v)}</td></tr>`));
+      rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`));
     $("ovs-msg").textContent = d.note || "";
   } catch (e) { $("ovs-msg").textContent = "读取失败：" + e; }
 }
@@ -1145,12 +1145,12 @@ $("drf-load").onclick = async () => {
     const probes = await adminCall("GET", "/api/probes");
     const rows = [];
     for (const [k, v] of Object.entries(drift.summary || {})) {
-      rows.push(`<tr><td style="padding:6px 8px">漂移 · ${esc(k)}</td>
-        <td style="padding:6px 8px">${esc(typeof v === "object" ? JSON.stringify(v) : v)}</td></tr>`);
+      rows.push(`<tr><td>漂移 · ${esc(k)}</td>
+        <td>${esc(typeof v === "object" ? JSON.stringify(v) : v)}</td></tr>`);
     }
     for (const [k, v] of Object.entries(probes.summary || {})) {
-      rows.push(`<tr><td style="padding:6px 8px">探活 · ${esc(k)}</td>
-        <td style="padding:6px 8px">${esc(typeof v === "object" ? JSON.stringify(v) : v)}</td></tr>`);
+      rows.push(`<tr><td>探活 · ${esc(k)}</td>
+        <td>${esc(typeof v === "object" ? JSON.stringify(v) : v)}</td></tr>`);
     }
     $("drf-out").innerHTML = rows.length
       ? table(["项", "值"], rows)
@@ -1270,8 +1270,8 @@ async function loadSiteEnv() {
     const rows = [];
     const add = (label, value) => {
       if (value === undefined || value === null || value === "") return;
-      rows.push(`<tr><td style="padding:6px 8px;color:#6b7280;white-space:nowrap">${esc(label)}</td>
-        <td style="padding:6px 8px;word-break:break-all">${esc(
+      rows.push(`<tr><td class="k">${esc(label)}</td>
+        <td>${esc(
           typeof value === "object" ? JSON.stringify(value) : String(value))}</td></tr>`);
     };
     add("版本", d.version);
