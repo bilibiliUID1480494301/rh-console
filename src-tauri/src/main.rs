@@ -263,9 +263,33 @@ fn ssh_audit(app: &tauri::AppHandle, entry: &serde_json::Value) -> Result<(), St
     fh.write_all(line.as_bytes()).map_err(|e| e.to_string())
 }
 
+
+/// ssh 只认 `-p PORT` + 裸主机，不认 `user@host:port`。
+/// 而端口转发/穿透场景给出的恰恰是 `user@127.0.0.1:2222`——必须自己拆。
+/// IPv6 字面量请写成 `[::1]:22` 或 `[::1]`。
+fn split_host_port(target: &str) -> Result<(String, Option<u16>), String> {
+    let Some(idx) = target.rfind(':') else {
+        return Ok((target.to_string(), None));
+    };
+    let (head, tail) = (&target[..idx], &target[idx + 1..]);
+    if tail.is_empty() || !tail.chars().all(|c| c.is_ascii_digit()) {
+        return Ok((target.to_string(), None));   // 尾巴不是数字：不是端口，原样交给 ssh
+    }
+    // 冒号前还有冒号 = 无括号 IPv6（root@::1），那个 "1" 是地址的一部分，不是端口
+    let head_is_bracketed_v6 = head.starts_with('[') && head.ends_with(']');
+    if head.contains(':') && !head_is_bracketed_v6 {
+        return Ok((target.to_string(), None));
+    }
+    let port: u16 = tail.parse().map_err(|_| format!("端口不合法：{tail}"))?;
+    if head.is_empty() {
+        return Err("缺少主机名".into());
+    }
+    Ok((head.to_string(), Some(port)))
+}
+
 fn ssh_check_host(host: &str) -> Result<(), String> {
-    if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || "@.-_:".contains(c)) {
-        return Err("host 只允许字母数字与 @ . - _ :".into());
+    if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || "@.-_:[]".contains(c)) {
+        return Err("host 只允许字母数字与 @ . - _ : [ ]".into());
     }
     Ok(())
 }
@@ -284,23 +308,36 @@ fn ssh_check_command(command: &str) -> Result<(), String> {
 }
 
 /// 执行一条远端命令。argv 直传：不做本地 shell 拼接，避免本地注入。
-fn ssh_exec(host: &str, key_path: &str, command: &str) -> Result<(i32, String, String, u128), String> {
-    let started = std::time::Instant::now();
+/// 拼 ssh 参数。单独拆出来是为了能断言「端口对不对、命令有没有被本地 shell 碰过」，
+/// 不必真连一台远端机器。
+fn ssh_args(target: &str, key_path: &str, command: &str) -> Result<Vec<String>, String> {
+    let (host, port) = split_host_port(target)?;
+    let mut args: Vec<String> = vec![
+        "-i".into(), key_path.to_string(),
+        "-o".into(), "BatchMode=yes".into(),
+        "-o".into(), "ConnectTimeout=10".into(),
+        "-o".into(), "StrictHostKeyChecking=accept-new".into(),
+    ];
+    if let Some(p) = port {
+        args.push("-p".into());
+        args.push(p.to_string());
+    }
+    args.push(host);
+    args.push(command.to_string());
+    Ok(args)
+}
+
+fn ssh_exec(target: &str, key_path: &str, command: &str) -> Result<(i32, String, String, u128), String> {
+    let started_at = std::time::Instant::now();
+    let args = ssh_args(target, key_path, command)?;
     let out = std::process::Command::new("ssh")
-        .args([
-            "-i", key_path,
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=10",
-            "-o", "StrictHostKeyChecking=accept-new",
-            host,
-            command,
-        ])
+        .args(&args)
         .output()
         .map_err(|e| format!("调用 ssh 失败：{e}"))?;
     let code = out.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    Ok((code, stdout, stderr, started.elapsed().as_millis()))
+    Ok((code, stdout, stderr, started_at.elapsed().as_millis()))
 }
 
 #[tauri::command]
@@ -952,6 +989,42 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn ssh_args_carry_port_and_verbatim_command() {
+        let args = ssh_args("root@127.0.0.1:2222", "C:/keys/id_ed25519", "systemctl status relayhub").unwrap();
+        let rendered = args.join(" ");
+        assert!(rendered.contains("-p 2222"), "端口没传成 -p：{rendered}");
+        // 命令必须原样作为最后一个 argv，不能被本机 shell 解释
+        assert_eq!(args.last().unwrap(), "systemctl status relayhub");
+        assert_eq!(args[args.len() - 2], "root@127.0.0.1");
+        // 无端口时不出现 -p
+        let plain = ssh_args("root@1.2.3.4", "k", "true").unwrap().join(" ");
+        assert!(!plain.contains("-p"), "不该凭空多出 -p：{plain}");
+        // 带管道/重定向的命令照原样传，不做本地拼接
+        let complex = "a | b > c 2>&1";
+        let a2 = ssh_args("h", "k", complex).unwrap();
+        assert_eq!(a2.last().unwrap(), complex);
+    }
+
+
+    #[test]
+    fn host_port_is_split_for_ssh() {
+        // 端口转发场景：user@127.0.0.1:2222 必须拆成 host + -p 2222
+        assert_eq!(split_host_port("root@127.0.0.1:2222").unwrap(),
+                   ("root@127.0.0.1".to_string(), Some(2222)));
+        assert_eq!(split_host_port("root@1.2.3.4").unwrap(),
+                   ("root@1.2.3.4".to_string(), None));
+        // 无括号的 IPv6 里冒号不是端口：原样返回，交给 ssh 处理
+        assert_eq!(split_host_port("root@::1").unwrap(),
+                   ("root@::1".to_string(), None));
+        assert_eq!(split_host_port("[::1]:22").unwrap(),
+                   ("[::1]".to_string(), Some(22)));
+        assert!(split_host_port("root@host:abc").is_ok());   // 不当端口，原样
+        assert!(split_host_port("root@host:99999").is_err()); // 越界
+        assert!(split_host_port(":22").is_err());             // 没主机
+    }
+
 
     #[test]
     fn ssh_presets_are_well_formed() {
