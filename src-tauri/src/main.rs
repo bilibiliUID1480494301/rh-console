@@ -13,11 +13,15 @@ struct Site {
     label: String,
     base_url: String,
     username: String,
+    /// 登录时探测到的站点角色。只读站（非 admin）在界面上要禁用写操作。
+    #[serde(default)]
+    role: String,
 }
 
 #[derive(Serialize)]
 struct Probe {
     status: String, // online | auth_failed | unreachable | incompatible | third_party
+    role: Option<String>, // 该账号在站点上的角色：admin | vip | user
     api_compat: Option<String>,
     version: Option<String>,
     latency_ms: u64,
@@ -210,18 +214,29 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// 行尾归一：签名按字节验，清单经 HTTP 回来常带 CRLF（reqwest 的 text() 不翻译换行，
+/// 不像 Python 的 read_text）。两侧必须用同一套规则，否则同一份清单两种验签结论。
+fn normalize_manifest(manifest: &str) -> String {
+    manifest.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 fn verify_signature(manifest: &str, signature_b64: &str) -> Result<(), String> {
+    verify_with_pubkey(RELEASE_PUBKEY, manifest, signature_b64)
+}
+
+fn verify_with_pubkey(public_key_b64: &str, manifest: &str, signature_b64: &str) -> Result<(), String> {
     use base64::Engine;
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
     let engine = base64::engine::general_purpose::STANDARD;
-    let key_bytes = engine.decode(RELEASE_PUBKEY).map_err(|e| e.to_string())?;
+    let key_bytes = engine.decode(public_key_b64).map_err(|e| e.to_string())?;
     let key_arr: [u8; 32] = key_bytes.try_into().map_err(|_| "公钥长度不对".to_string())?;
     let key = VerifyingKey::from_bytes(&key_arr).map_err(|e| e.to_string())?;
 
     let sig_bytes = engine.decode(signature_b64.trim()).map_err(|e| e.to_string())?;
     let signature = Signature::from_slice(&sig_bytes).map_err(|e| e.to_string())?;
-    key.verify(manifest.as_bytes(), &signature)
+    let normalized = normalize_manifest(manifest);
+    key.verify(normalized.as_bytes(), &signature)
         .map_err(|_| "签名与清单不匹配（拒绝部署）".to_string())
 }
 
@@ -243,7 +258,17 @@ async fn remote_deploy(
     key_path: String,
     version: String,
     python: String,
+    mode: Option<String>,
+    data_dir: Option<String>,
 ) -> Result<String, String> {
+    let mode = mode.unwrap_or_else(|| "pip".into());
+    let data_dir = data_dir.unwrap_or_else(|| "/opt/hubrelay".into());
+    if mode != "pip" && mode != "docker" {
+        return Err("mode 只能是 pip 或 docker".into());
+    }
+    if !data_dir.starts_with('/') || !data_dir.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.')) {
+        return Err("data_dir 必须是以 / 开头的绝对路径".into());
+    }
     // 远程部署**先在本地验签再传**：不能让远端只凭 PyPI 的 TLS 信任就装代码。
     // 私钥只收路径、不落盘：远程 shell 的权限比面板密码高一个量级。
     if !host.chars().all(|c| c.is_ascii_alphanumeric() || "@.-_:".contains(c)) {
@@ -300,9 +325,25 @@ async fn remote_deploy(
         return Err(format!("scp 失败：{}", String::from_utf8_lossy(&scp.stderr)));
     }
 
-    let remote = format!(
-        "{py} -m pip install --no-deps --force-reinstall --no-input {remote_tmp} && rm -f {remote_tmp} && {py} -m relayhub.gateway --version"
-    );
+    // 部署前先记下远端当前版本，健康检查不过时用来回滚
+    let prev = std::process::Command::new("ssh")
+        .args(["-i", &key_path, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+               "-o", "StrictHostKeyChecking=accept-new", &host,
+               &format!("{py} -m relayhub.gateway --version 2>/dev/null | head -1")])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let remote = if mode == "docker" {
+        format!(
+            "set -e; mkdir -p {data_dir}{{/data,/pkg}}; mv {remote_tmp} {data_dir}/pkg/{name}; docker rm -f hubrelay >/dev/null 2>&1 || true; docker run -d --name hubrelay --restart unless-stopped   -p 8799:8799 -v {data_dir}/data:/data -v {data_dir}/pkg/{name}:/tmp/pkg.whl:ro   python:3.12-slim sh -c 'pip install --no-cache-dir /tmp/pkg.whl && hubrelay serve --host 0.0.0.0 --port 8799 --public'; sleep 8; docker exec hubrelay python -c \"import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8799/healthz',timeout=5).status==200 else 1)\""
+        )
+    } else {
+        format!(
+            "{py} -m pip install --no-deps --force-reinstall --no-input {remote_tmp} && rm -f {remote_tmp} && {py} -m relayhub.gateway --version"
+        )
+    };
     let ssh = std::process::Command::new("ssh")
         .args([
             "-i", &key_path, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
@@ -313,15 +354,31 @@ async fn remote_deploy(
         .map_err(|e| format!("调用 ssh 失败：{e}"))?;
     let stdout = String::from_utf8_lossy(&ssh.stdout).to_string();
     if !ssh.status.success() {
-        return Err(format!(
-            "远程安装失败（{}）：{}{}",
+        // 装完起不来：pip 模式下尝试回滚到部署前版本，把现场情况一并报出来
+        let mut msg = format!(
+            "远程{}失败（{}）：{}{}",
+            if mode == "docker" { "容器启动" } else { "安装" },
             ssh.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&ssh.stderr),
             stdout
-        ));
+        );
+        if mode == "pip" {
+            if let Some(prev_version) = prev.as_ref() {
+                if let Some(v) = prev_version.split_whitespace().last() {
+                    let _ = std::process::Command::new("ssh")
+                        .args(["-i", &key_path, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                               "-o", "StrictHostKeyChecking=accept-new", &host,
+                               &format!("{py} -m pip install --no-deps --force-reinstall --no-input relayhub=={v}")])
+                        .output();
+                    msg.push_str(&format!("
+已尝试回滚到 {v}，请核实远端状态。"));
+                }
+            }
+        }
+        return Err(msg);
     }
-    Ok(format!("已验签并部署 {version} → {}
-{}", host, stdout.trim()))
+    Ok(format!("已验签并部署 {version} → {host}（{mode}）
+{}", stdout.trim()))
 }
 
 #[tauri::command]
@@ -363,6 +420,7 @@ async fn site_test(base_url: String, username: String, password: String) -> Prob
     let started = std::time::Instant::now();
     let mut out = Probe {
         status: "unreachable".into(),
+        role: None,
         api_compat: None,
         version: None,
         latency_ms: 0,
@@ -428,6 +486,37 @@ async fn site_test(base_url: String, username: String, password: String) -> Prob
             out.detail = Some(format!("响应不是预期 JSON：{e}"));
         }
     }
+    // 探测角色：站点有三级（user / vip / admin）。
+    // 先问 /api/user/me 拿准确角色；拿不到再退回「能否读 /api/users」判管理员。
+    if out.status == "online" {
+        if let Ok(cookie) = login_cookie(&base, &username, &password).await {
+            let me = client
+                .get(format!("{base}/api/state"))
+                .header("Cookie", cookie.clone())
+                .send()
+                .await;
+            let mut role: Option<String> = None;
+            if let Ok(resp) = me {
+                if resp.status().is_success() {
+                    if let Ok(v) = resp.json::<serde_json::Value>().await {
+                        role = v.get("role").and_then(|x| x.as_str()).map(|s| s.to_string());
+                    }
+                }
+            }
+            if role.is_none() {
+                let resp = client
+                    .get(format!("{base}/api/users"))
+                    .header("Cookie", cookie)
+                    .send()
+                    .await;
+                role = Some(match resp {
+                    Ok(r) if r.status().is_success() => "admin".to_string(),
+                    _ => "user".to_string(),
+                });
+            }
+            out.role = role;
+        }
+    }
     out
 }
 
@@ -452,6 +541,7 @@ async fn site_add(
         },
         base_url: base_of(&base_url),
         username,
+        role: probe.role.clone().unwrap_or_else(|| "user".into()),
     };
     keyring::Entry::new(KEYRING_SERVICE, &format!("site:{}", site.id))
         .map_err(|e| e.to_string())?
@@ -598,7 +688,10 @@ fn main() {
             remote_deploy,
             site_remove,
             env_detect,
-            instance_create
+            instance_create,
+            overview_all,
+            site_users,
+            site_set_role
         ])
         .run(tauri::generate_context!())
         .expect("failed to start relay-hub console");
@@ -618,6 +711,25 @@ bb  hubrelay-1.2.3.tar.gz
     }
 
     #[test]
+    fn crlf_manifest_verifies_against_lf_signature() {
+        // 发布方签 LF，清单回来可能带 CRLF：验签前必须归一，否则新旧资产结论不一致
+        use base64::Engine;
+        use ed25519_dalek::{Signer, SigningKey};
+
+        let engine = base64::engine::general_purpose::STANDARD;
+        let signing = SigningKey::from_bytes(&[7u8; 32]);
+        let pub_b64 = engine.encode(signing.verifying_key().to_bytes());
+
+        let lf = "aa  hubrelay-0.12.31-py3-none-any.whl\nbb  hubrelay-0.12.31.tar.gz\n";
+        let sig = engine.encode(signing.sign(lf.as_bytes()).to_bytes());
+
+        assert!(verify_with_pubkey(&pub_b64, lf, &sig).is_ok());
+        assert!(verify_with_pubkey(&pub_b64, &lf.replace('\n', "\r\n"), &sig).is_ok());
+        // 内容真被改过还是要拒绝
+        assert!(verify_with_pubkey(&pub_b64, "cc  hubrelay-0.12.31-py3-none-any.whl\n", &sig).is_err());
+    }
+
+    #[test]
     fn rejects_bad_signature() {
         // 32 字节全零公钥对应的签名绝不可能是真签名：必须拒绝而不是放行
         let manifest = "aa  hubrelay-1.2.3-py3-none-any.whl
@@ -633,4 +745,217 @@ bb  hubrelay-1.2.3.tar.gz
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }
+}
+
+
+// ---- 多站点总览：一次把所有站的用量拉齐（网页版做不到，它一次只能登一个站） ----
+
+#[derive(serde::Deserialize)]
+struct SiteRef {
+    id: String,
+    label: String,
+    base_url: String,
+    username: String,
+}
+
+#[derive(serde::Serialize)]
+struct SiteOverview {
+    id: String,
+    label: String,
+    base_url: String,
+    ok: bool,
+    status: String,
+    requests: u64,
+    failed: u64,
+    tokens_in: u64,
+    tokens_out: u64,
+    latency_ms: u64,
+    detail: Option<String>,
+}
+
+fn pick_u64(v: &serde_json::Value, path: &str) -> u64 {
+    v.pointer(path).and_then(|x| x.as_u64()).unwrap_or(0)
+}
+
+#[tauri::command]
+async fn overview_all(sites: Vec<SiteRef>, days: Option<u32>) -> Result<Vec<SiteOverview>, String> {
+    let window = days.unwrap_or(1).max(1);
+    let mut out = Vec::with_capacity(sites.len());
+    for site in sites {
+        let entry = keyring::Entry::new(KEYRING_SERVICE, &format!("site:{}", site.id))
+            .map_err(|e| e.to_string())?;
+        let password = match entry.get_password() {
+            Ok(p) => p,
+            Err(_) => {
+                out.push(SiteOverview {
+                    id: site.id, label: site.label, base_url: site.base_url,
+                    ok: false, status: "no_credential".into(),
+                    requests: 0, failed: 0, tokens_in: 0, tokens_out: 0, latency_ms: 0,
+                    detail: Some("本机没有保存该站口令".into()),
+                });
+                continue;
+            }
+        };
+        let base = base_of(&site.base_url);
+        let started = std::time::Instant::now();
+        let fetched = async {
+            let cookie = login_cookie(&base, &site.username, &password).await?;
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(20))
+                .build()
+                .map_err(|e| e.to_string())?;
+            let resp = client
+                .get(format!("{base}/api/usage?days={window}"))
+                .header("Cookie", cookie)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            if !resp.status().is_success() {
+                return Err(format!("HTTP {}", resp.status().as_u16()));
+            }
+            resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+        }
+        .await;
+        let latency_ms = started.elapsed().as_millis() as u64;
+        match fetched {
+            Ok(v) => {
+                // 实际形状：{"requests":{"window":{requests,ok,failed,tokens_in,tokens_out,...}}}
+                let w = v.pointer("/requests/window").cloned().unwrap_or(serde_json::Value::Null);
+                out.push(SiteOverview {
+                    id: site.id, label: site.label, base_url: site.base_url,
+                    ok: true, status: "online".into(),
+                    requests: pick_u64(&w, "/requests"),
+                    failed: pick_u64(&w, "/failed"),
+                    tokens_in: pick_u64(&w, "/tokens_in"),
+                    tokens_out: pick_u64(&w, "/tokens_out"),
+                    latency_ms,
+                    detail: None,
+                });
+            }
+            Err(e) => out.push(SiteOverview {
+                id: site.id, label: site.label, base_url: site.base_url,
+                ok: false, status: "error".into(),
+                requests: 0, failed: 0, tokens_in: 0, tokens_out: 0, latency_ms,
+                detail: Some(e),
+            }),
+        }
+    }
+    Ok(out)
+}
+
+
+// ---- 权限分配：在这台控制台里改站内用户的角色 ----
+// 站点侧四层：owner(站长) / admin(管理员) / vip / user。
+// 守卫放 Rust 侧：前端隐藏按钮不算数，这里再判一次。
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct UserRow {
+    user_id: String,
+    username: String,
+    role: String,
+    enabled: bool,
+    quota: i64,
+    used: i64,
+}
+
+async fn site_session(site_id: &str, app: &tauri::AppHandle) -> Result<(String, String, String, String), String> {
+    let site = load_sites(app)
+        .into_iter()
+        .find(|s| s.id == site_id)
+        .ok_or_else(|| "没有这个站点".to_string())?;
+    let entry = keyring::Entry::new(KEYRING_SERVICE, &format!("site:{}", site.id))
+        .map_err(|e| e.to_string())?;
+    let password = entry.get_password().map_err(|_| "本机没有保存该站口令".to_string())?;
+    let base = base_of(&site.base_url);
+    let cookie = login_cookie(&base, &site.username, &password).await?;
+    Ok((base, site.username, password, cookie))
+}
+
+async fn my_scopes(base: &str, cookie: &str) -> Vec<String> {
+    let client = match reqwest::Client::builder().timeout(std::time::Duration::from_secs(10)).build() {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    match client.get(format!("{base}/api/state")).header("Cookie", cookie.to_string()).send().await {
+        Ok(r) if r.status().is_success() => r
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| v.get("scopes").and_then(|x| x.as_array()).map(|arr| {
+                arr.iter().filter_map(|s| s.as_str().map(|x| x.to_string())).collect::<Vec<_>>()
+            }))
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+#[tauri::command]
+async fn site_users(app: tauri::AppHandle, site_id: String) -> Result<Vec<UserRow>, String> {
+    let (base, _u, _p, cookie) = site_session(&site_id, &app).await?;
+    let scopes = my_scopes(&base, &cookie).await;
+    if !scopes.iter().any(|s| s == "user:read") {
+        return Err("当前账号没有 user:read，看不到用户列表".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(format!("{base}/api/users"))
+        .header("Cookie", cookie)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status().as_u16()));
+    }
+    let v: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    if let Some(items) = v.get("users").and_then(|u| u.as_array()) {
+        for u in items {
+            out.push(UserRow {
+                user_id: u.get("user_id").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                username: u.get("username").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                role: u.get("role").and_then(|x| x.as_str()).unwrap_or("user").to_string(),
+                enabled: u.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true),
+                quota: u.get("quota").and_then(|x| x.as_i64()).unwrap_or(0),
+                used: u.get("used").and_then(|x| x.as_i64()).unwrap_or(0),
+            });
+        }
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+async fn site_set_role(
+    app: tauri::AppHandle,
+    site_id: String,
+    user_id: String,
+    role: String,
+) -> Result<(), String> {
+    if !["user", "vip", "admin"].contains(&role.as_str()) {
+        return Err(format!("未知角色 {role}"));
+    }
+    let (base, _u, _p, cookie) = site_session(&site_id, &app).await?;
+    let scopes = my_scopes(&base, &cookie).await;
+    if !scopes.iter().any(|s| s == "role:grant") {
+        return Err("当前账号没有 role:grant，只有站长能改角色".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .put(format!("{base}/api/users/{user_id}"))
+        .header("Cookie", cookie)
+        .json(&serde_json::json!({"role": role}))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let code = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {code} {body}"));
+    }
+    Ok(())
 }

@@ -67,6 +67,38 @@
     </details>
   </section>
 
+  <section class="card" id="dep-card">
+    <strong>远程部署</strong>
+    <span class="hint">先本地验签（ed25519）再传，哈希不符会拒绝；装完自动探活，pip 模式失败会尝试回滚</span>
+    <label>主机（user@host[:port]）</label>
+    <input id="dep-host" placeholder="root@1.2.3.4" />
+    <label>私钥路径（需免密，不能被口令保护）</label>
+    <input id="dep-key" placeholder="C:\Users\you\.ssh\id_ed25519" />
+    <label>版本</label>
+    <input id="dep-ver" placeholder="0.12.31" />
+    <div class="row">
+      <label style="margin:0"><input type="radio" name="depmode" value="pip" checked /> pip</label>
+      <label style="margin:0"><input type="radio" name="depmode" value="docker" /> docker</label>
+    </div>
+    <label>数据目录（docker 模式用，默认 /opt/hubrelay）</label>
+    <input id="dep-dir" placeholder="/opt/hubrelay" />
+    <div class="row"><button id="dep-run" class="primary">部署</button><span class="hint" id="dep-msg"></span></div>
+    <pre id="dep-out" class="hint" style="white-space:pre-wrap;margin-top:8px"></pre>
+  </section>
+
+  <section class="card" id="perm-card">
+    <strong>权限分配 <span class="hint" id="perm-title"></span></strong>
+    <span class="hint">改站内用户角色。只有 admin/owner 身份能读列表；授予管理员只有站长可以</span>
+    <div id="perm-body" style="margin-top:10px"><p class="hint">在下面站点列表点「权限」</p></div>
+  </section>
+
+  <section class="card" id="ov-card">
+    <strong>多站点总览</strong>
+    <span class="hint">一次把所有站点拉齐 —— 网页版一次只能登一个站</span>
+    <div class="row"><button id="ov-run">刷新总览</button><span class="hint" id="ov-msg"></span></div>
+    <div id="ov" style="margin-top:10px"></div>
+  </section>
+
   <section class="card" id="doc">
     <strong>本机自检（doctor）</strong>
     <span class="hint">检查本机 Python / 数据目录 / 端口，不针对远程站点</span>

@@ -68,6 +68,22 @@ async function healthDots(sites) {
   }
 }
 
+// 管理面三档（scope 矩阵）：owner 全权 / admin 只读 / viewer 更少
+const ROLE_LABEL = { owner: "站长", admin: "管理员(只读)", viewer: "查看者", vip: "VIP", user: "普通用户" };
+const ROLE_TIP = {
+  owner: "全部权限：改配置、改角色、发令牌",
+  admin: "能看不能改：渠道/令牌/用量/日志只读",
+  viewer: "只看用量与日志",
+  vip: "计费层面的 VIP 分组",
+  user: "普通用户",
+};
+function roleTag(role) {
+  const key = String(role || "").toLowerCase();
+  if (!ROLE_LABEL[key]) return ' <small class="hint">权限未知</small>';
+  return ` <small class="hint" title="${ROLE_TIP[key] || ""}">[${ROLE_LABEL[key]}]</small>`;
+}
+function canWrite(role) { return String(role || "").toLowerCase() === "admin"; }
+
 async function loadSites() {
   if (!invoke) return;
   const sites = await invoke("site_list");
@@ -78,7 +94,12 @@ async function loadSites() {
     const row = document.createElement("div");
     row.className = "site";
     row.dataset.id = s.id;
-    row.innerHTML = `<div><span class="dot ${health[s.id] || ""}"></span>${s.label}<br><small>${s.base_url} · ${s.username || ""}</small></div>`;
+    row.innerHTML = `<div><span class="dot ${health[s.id] || ""}"></span>${s.label}${roleTag(s.role)}<br><small>${s.base_url} · ${s.username || ""}</small></div>`;
+    const perm = document.createElement("button");
+    perm.textContent = "权限";
+    perm.className = "ghost";
+    perm.onclick = () => openPerm(s.id, s.label, s.role);
+    row.appendChild(perm);
     const del = document.createElement("button");
     del.textContent = "移除";
     del.onclick = async () => { await invoke("site_remove", { id: s.id }); loadSites(); };
@@ -475,3 +496,134 @@ langBtn.onclick = () => {
 };
 (document.querySelector("header") || document.body).appendChild(langBtn);
 if (enUI) walkLang(document.body);
+
+// ---- 多站点总览 ----
+function ovEsc(v) {
+  return String(v == null ? "" : v).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[c]);
+}
+
+async function reloadOverview() {
+  const msg = document.getElementById("ov-msg");
+  const box = document.getElementById("ov");
+  if (!msg || !box) return;
+  let sites = [];
+  try { sites = await invoke("site_list"); } catch (e) { msg.textContent = String(e); return; }
+  if (!sites.length) { box.innerHTML = '<p class="hint">先在上面保存一个站点</p>'; return; }
+  msg.textContent = "拉取中…";
+  try {
+    const rows = await invoke("overview_all", {
+      sites: sites.map(s => ({ id: s.id, label: s.label, base_url: s.base_url, username: s.username })),
+      days: 1,
+    });
+    const sum = rows.reduce((a, r) => ({
+      requests: a.requests + r.requests,
+      failed: a.failed + r.failed,
+      tokens_in: a.tokens_in + r.tokens_in,
+      tokens_out: a.tokens_out + r.tokens_out,
+    }), { requests: 0, failed: 0, tokens_in: 0, tokens_out: 0 });
+    const body = rows.map(r => `<tr>
+      <td>${ovEsc(r.label)}</td>
+      <td>${r.ok ? "在线" : ovEsc(r.status)}</td>
+      <td>${r.requests}</td>
+      <td>${r.failed}</td>
+      <td>${r.tokens_in}&rarr;${r.tokens_out}</td>
+      <td>${r.latency_ms} ms</td>
+      <td class="hint">${ovEsc(r.detail || "")}</td>
+    </tr>`).join("");
+    box.innerHTML = `<table><thead><tr>
+      <th>站点</th><th>状态</th><th>请求(24h)</th><th>失败</th><th>tokens</th><th>延迟</th><th></th>
+      </tr></thead><tbody>${body}</tbody>
+      <tfoot><tr><th>合计 ${rows.length} 个站</th><th></th>
+      <th>${sum.requests}</th><th>${sum.failed}</th>
+      <th>${sum.tokens_in}&rarr;${sum.tokens_out}</th><th></th><th></th></tr></tfoot></table>`;
+    msg.textContent = "已更新";
+  } catch (e) {
+    msg.textContent = "失败：" + String(e);
+  }
+}
+
+const ovBtn = document.getElementById("ov-run");
+if (ovBtn) ovBtn.onclick = reloadOverview;
+
+
+// ---- 权限分配 ----
+const ROLE_ORDER = ["user", "vip", "admin"];
+
+async function openPerm(siteId, label, myRole) {
+  const title = document.getElementById("perm-title");
+  const box = document.getElementById("perm-body");
+  if (!box) return;
+  if (title) title.textContent = label || "";
+  box.innerHTML = '<p class="hint">读取中…</p>';
+  try {
+    const rows = await invoke("site_users", { siteId });
+    if (!rows.length) { box.innerHTML = '<p class="hint">这个站没有用户</p>'; return; }
+    const canGrantAdmin = String(myRole || "").toLowerCase() === "owner";
+    const head = `<tr><th>用户名</th><th>角色</th><th>启用</th><th>额度</th><th>已用</th></tr>`;
+    const body = rows.map(u => {
+      const opts = ROLE_ORDER.map(r =>
+        `<option value="${r}"${r === u.role ? " selected" : ""}>${
+          ({ user: "普通", vip: "VIP", admin: "管理员" })[r]}</option>`).join("");
+      return `<tr data-uid="${ovEsc(u.user_id)}">
+        <td>${ovEsc(u.username)}</td>
+        <td><select ${canGrantAdmin ? "" : "data-noadmin=1"}>${opts}</select></td>
+        <td>${u.enabled ? "是" : '<span class="hint">停用</span>'}</td>
+        <td>${u.quota < 0 ? "无限" : u.quota}</td>
+        <td>${u.used}</td>
+      </tr>`;
+    }).join("");
+    box.innerHTML = `<table>${head}${body}</table>`;
+    box.querySelectorAll("select").forEach(sel => {
+      sel.onchange = async () => {
+        const uid = sel.closest("tr").dataset.uid;
+        const role = sel.value;
+        if (role === "admin" && sel.dataset.noadmin) {
+          sel.value = sel.dataset.prev || "user";
+          return;
+        }
+        sel.disabled = true;
+        try {
+          await invoke("site_set_role", { siteId, userId: uid, role });
+          sel.dataset.prev = role;
+        } catch (e) {
+          alert("改不了：" + e);
+          sel.value = sel.dataset.prev || "user";
+        } finally { sel.disabled = false; }
+      };
+      sel.dataset.prev = sel.value;
+    });
+  } catch (e) {
+    box.innerHTML = `<p class="hint">${ovEsc(String(e))}</p>`;
+  }
+}
+
+
+// ---- 远程部署 ----
+async function runDeploy() {
+  const msg = document.getElementById("dep-msg");
+  const out = document.getElementById("dep-out");
+  const btn = document.getElementById("dep-run");
+  const mode = (document.querySelector('input[name="depmode"]:checked') || {}).value || "pip";
+  const host = document.getElementById("dep-host").value.trim();
+  const key = document.getElementById("dep-key").value.trim();
+  const version = document.getElementById("dep-ver").value.trim();
+  const dataDir = document.getElementById("dep-dir").value.trim();
+  if (!host || !key || !version) { msg.textContent = "主机 / 私钥 / 版本都要填"; return; }
+  btn.disabled = true;
+  msg.textContent = "验签并部署中…（会先下载校验，别关窗口）";
+  out.textContent = "";
+  try {
+    const r = await invoke("remote_deploy", {
+      host, keyPath: key, version, python: "", mode, dataDir,
+    });
+    msg.textContent = "成功";
+    out.textContent = r;
+  } catch (e) {
+    msg.textContent = "失败";
+    out.textContent = String(e);
+  } finally { btn.disabled = false; }
+}
+const depBtn = document.getElementById("dep-run");
+if (depBtn) depBtn.onclick = runDeploy;
