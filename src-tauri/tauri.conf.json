@@ -3,13 +3,34 @@
   "productName": "relay-hub Console",
   "version": "0.1.0",
   "identifier": "dev.relayhub.console",
-  "build": { "frontendDist": "../ui" },
+  "build": {
+    "frontendDist": "../ui"
+  },
   "app": {
     "withGlobalTauri": true,
     "windows": [
-      { "title": "relay-hub Console", "width": 1100, "height": 720, "minWidth": 900, "minHeight": 600 }
+      {
+        "title": "relay-hub Console",
+        "width": 1100,
+        "height": 720,
+        "minWidth": 900,
+        "minHeight": 600
+      }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": null
+    }
   },
-  "bundle": { "active": false, "targets": "all" }
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon-256.png",
+      "icons/icon-512.png",
+      "icons/icon.ico"
+    ]
+  }
 }
