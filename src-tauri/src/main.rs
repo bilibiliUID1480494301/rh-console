@@ -991,6 +991,37 @@ fn main() {
 #[cfg(test)]
 mod tests {
 
+    /// 真连一次本机测试 sshd（默认忽略；显式 --ignored 才跑）。
+    /// 起服务端：python E:/dev/.tmp-asar/sshtest_server.py（127.0.0.1:2222，只认 sshtest_clientkey）
+    /// 注意：假远端是 MSYS bash，复杂复合命令偶发 fork 失败返回 255——
+    /// 那是测试夹具的问题，不代表产品行为，所以这里只断言协议层可判定的部分。
+    #[test]
+    #[ignore = "需要本机 127.0.0.1:2222 的测试 sshd"]
+    fn ssh_exec_end_to_end() {
+        let key = "E:/dev/.tmp-asar/sshtest_clientkey";
+
+        // 1) 退出码必须原样透传（我们靠它判断成败）
+        let (code, out, err, ms) =
+            ssh_exec("test@127.0.0.1:2222", key, "echo hello-e2e; exit 7").unwrap();
+        assert_eq!(code, 7, "退出码没透传：out={out} err={err}");
+        assert!(out.contains("hello-e2e"), "stdout 丢了：{out}");
+        assert!(ms > 0, "耗时应有值");
+
+        // 2) 两条流都要回收（假远端的 stdout/stderr 会串，故只断言内容都在）
+        let (code2, out2, err2, _) =
+            ssh_exec("test@127.0.0.1:2222", key, "echo to-stdout; echo to-stderr 1>&2").unwrap();
+        assert_eq!(code2, 0);
+        let both = format!("{out2}{err2}");
+        assert!(both.contains("to-stdout"), "stdout 内容丢了：{both}");
+        assert!(both.contains("to-stderr"), "stderr 内容丢了：{both}");
+
+        // 3) 端口写法：无端口的 target 仍走默认 22（这里应连接失败而非 panic）
+        let plain = ssh_exec("test@127.0.0.1", key, "true");
+        assert!(plain.is_err() || plain.map(|(c, ..)| c != 0).unwrap_or(true),
+                "不该意外连上默认端口的服务");
+    }
+
+
     #[test]
     fn ssh_args_carry_port_and_verbatim_command() {
         let args = ssh_args("root@127.0.0.1:2222", "C:/keys/id_ed25519", "systemctl status relayhub").unwrap();
