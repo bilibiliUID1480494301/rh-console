@@ -252,6 +252,78 @@ fn pick_wheel_hash(manifest: &str, version: &str) -> Option<String> {
     None
 }
 
+const GH_REPO: &str = "bilibiliUID1480494301/relay-hub";
+const GH_API: &str = "https://api.github.com";
+
+/// 发布资产下载器：先直连 github.com，被挡时回落 api.github.com 的资产端点。
+///
+/// 回落只换传输路径，**验签强度不变**；一次直连失败后不再重试，
+/// 否则三个资产各等一次超时，部署要白等一分半。
+struct ReleaseDownloader {
+    client: reqwest::Client,
+    version: String,
+    prefer_api: bool,
+    index: Option<std::collections::HashMap<String, String>>,
+}
+
+impl ReleaseDownloader {
+    fn new(client: reqwest::Client, version: &str) -> Self {
+        Self { client, version: version.to_string(), prefer_api: false, index: None }
+    }
+
+    async fn asset(&mut self, name: &str) -> Result<Vec<u8>, String> {
+        let direct = format!(
+            "https://github.com/{GH_REPO}/releases/download/v{}/{name}",
+            self.version
+        );
+        if !self.prefer_api {
+            match self.client.get(&direct).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    return resp.bytes().await.map(|b| b.to_vec()).map_err(|e| e.to_string());
+                }
+                _ => self.prefer_api = true,
+            }
+        }
+        if self.index.is_none() {
+            self.index = Some(self.load_index().await?);
+        }
+        let url = self
+            .index
+            .as_ref()
+            .and_then(|m| m.get(name).cloned())
+            .ok_or_else(|| format!("API 的发布资产里没有 {name}"))?;
+        let resp = self
+            .client
+            .get(url)
+            .header("Accept", "application/octet-stream")
+            .send()
+            .await
+            .map_err(|e| format!("API 下载 {name} 失败：{e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("API 下载 {name} 失败：HTTP {}", resp.status()));
+        }
+        resp.bytes().await.map(|b| b.to_vec()).map_err(|e| e.to_string())
+    }
+
+    async fn load_index(&self) -> Result<std::collections::HashMap<String, String>, String> {
+        let resp = self
+            .client
+            .get(format!("{GH_API}/repos/{GH_REPO}/releases/tags/v{}", self.version))
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await
+            .map_err(|e| format!("查询 release 失败：{e}"))?;
+        let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        let mut map = std::collections::HashMap::new();
+        for asset in body.get("assets").and_then(|a| a.as_array()).into_iter().flatten() {
+            let (Some(n), Some(u)) = (asset.get("name").and_then(|v| v.as_str()), asset.get("url").and_then(|v| v.as_str()))
+            else { continue };
+            map.insert(n.to_string(), u.to_string());
+        }
+        Ok(map)
+    }
+}
+
 #[tauri::command]
 async fn remote_deploy(
     host: String,
@@ -285,24 +357,23 @@ async fn remote_deploy(
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
+        // GitHub API 对没有 UA 的请求直接 403，回落请求必须带上
+        .user_agent("rh-console")
         .build()
         .map_err(|e| e.to_string())?;
-    let base = format!("https://github.com/bilibiliUID1480494301/relay-hub/releases/download/v{version}");
+    let mut dl = ReleaseDownloader::new(client, &version);
 
-    let manifest = client.get(format!("{base}/SHA256SUMS")).send().await
-        .map_err(|e| format!("下载清单失败：{e}"))?.text().await
-        .map_err(|e| e.to_string())?;
-    let signature = client.get(format!("{base}/SHA256SUMS.sig")).send().await
-        .map_err(|e| format!("下载签名失败：{e}"))?.text().await
-        .map_err(|e| e.to_string())?;
+    // 直连被墙时自动回落 api.github.com；拿回来的字节照旧要验签 + 比哈希
+    let manifest = String::from_utf8_lossy(&dl.asset("SHA256SUMS").await?)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
+    let signature = String::from_utf8_lossy(&dl.asset("SHA256SUMS.sig").await?).to_string();
     verify_signature(&manifest, &signature)?;
 
     let expected = pick_wheel_hash(&manifest, &version)
         .ok_or_else(|| format!("签名清单里没有 {version} 的 wheel"))?;
     let name = format!("hubrelay-{version}-py3-none-any.whl");
-    let bytes = client.get(format!("{base}/{name}")).send().await
-        .map_err(|e| format!("下载 wheel 失败：{e}"))?.bytes().await
-        .map_err(|e| e.to_string())?;
+    let bytes = dl.asset(&name).await?;
     if sha256_hex(&bytes) != expected {
         return Err("wheel 与签名清单的哈希不一致（拒绝部署）".into());
     }
