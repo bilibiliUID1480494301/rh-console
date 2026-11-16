@@ -241,11 +241,12 @@ async fn admin_call(
 // 4. 每次执行都写本地审计（时间/主机/命令/退出码/耗时），便于事后追。
 pub const SSH_PRESETS: &[(&str, &str, &str, bool)] = &[
     ("version", "版本", "python3 -m relayhub.gateway --version 2>/dev/null || hubrelay --version", false),
+    ("env", "环境自检", "uname -srm; cat /etc/os-release 2>/dev/null | head -2; if [ -f /.dockerenv ]; then echo 容器环境：docker; fi; if command -v systemctl >/dev/null 2>&1; then echo 有systemd; else echo 无systemd; fi; if command -v python3 >/dev/null 2>&1; then python3 -V; else echo 无python3; fi", false),
     ("probe", "健康探测", "curl -s -o /dev/null -m 3 -w '%{http_code}' http://127.0.0.1:8799/v1/messages || echo 不通", false),
-    ("ports", "监听端口", "ss -ltnp 2>/dev/null | grep -E ':(8799|18802)' || netstat -ltn 2>/dev/null | grep -E ':(8799|18802)' || echo 没看到 8799/18802 在听", false),
-    ("disk", "磁盘与内存", "df -h / /opt/hubrelay 2>/dev/null; free -m 2>/dev/null", false),
-    ("logs", "最近日志", "journalctl -u relayhub -n 100 --no-pager 2>/dev/null || tail -n 100 /var/log/relayhub.log 2>/dev/null || echo 找不到日志", false),
-    ("restart", "重启服务", "systemctl restart relayhub 2>/dev/null && echo 已重启systemd || echo 非systemd部署请自行重启", true),
+    ("ports", "监听端口", "if command -v ss >/dev/null 2>&1; then ss -ltn 2>/dev/null | grep -E ':(8799|18802)' || echo 没看到8799/18802在听; elif command -v netstat >/dev/null 2>&1; then netstat -ltn 2>/dev/null | grep -E ':(8799|18802)'; else echo 容器里没有ss/netstat，可试 cat /proc/net/tcp; fi", false),
+    ("disk", "磁盘与内存", "df -h / 2>/dev/null; df -h /opt/hubrelay 2>/dev/null; free -m 2>/dev/null || echo 无free", false),
+    ("logs", "最近日志", "if command -v journalctl >/dev/null 2>&1; then journalctl -u relayhub -n 100 --no-pager; elif [ -f /var/log/relayhub.log ]; then tail -n 100 /var/log/relayhub.log; else echo 没有本地日志：容器部署的日志由平台收集（Railway: railway logs，或面板 Logs）; fi", false),
+    ("restart", "重启服务", "if command -v systemctl >/dev/null 2>&1; then systemctl restart relayhub && echo 已重启systemd; else echo 容器或非systemd部署：请用平台方式重启（Railway Redeploy / docker restart / keepalive 拉起）; fi", true),
 ];
 
 fn ssh_audit(app: &tauri::AppHandle, entry: &serde_json::Value) -> Result<(), String> {

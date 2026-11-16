@@ -1173,6 +1173,7 @@ $("upd-rollback").onclick = async () => {
 // 预设只传 id，命令串在 Rust 侧（SSH_PRESETS）；自由命令要过确认。
 const SSH_PRESETS_UI = [
   ["version", "版本"],
+  ["env", "环境自检"],
   ["probe", "健康探测"],
   ["ports", "监听端口"],
   ["disk", "磁盘与内存"],
