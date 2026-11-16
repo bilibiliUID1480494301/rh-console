@@ -850,3 +850,105 @@ async function loadAudit() {
   } catch (e) { $("aud-msg").textContent = "读取失败：" + e; }
 }
 $("aud-load").onclick = loadAudit;
+
+// ---- 公告 / 特性开关 / 诊断 ----
+async function loadAnnouncement() {
+  if (!invoke) return;
+  try {
+    const a = await adminCall("GET", "/api/announcement");
+    $("ann-text").value = a.text || "";
+    $("ann-level").value = a.level || "info";
+    $("ann-pinned").checked = !!a.pinned;
+    const left = a.until ? Math.max(0, Math.round((a.until - Date.now() / 1000) / 3600)) : 0;
+    $("ann-hours").value = left;
+    $("ann-msg").textContent = a.text ? (a.until ? `生效中 · 剩余约 ${left} 小时` : "生效中 · 长期") : "当前没有公告";
+  } catch (e) { $("ann-msg").textContent = "读取失败：" + e; }
+}
+
+async function saveAnnouncement(text, hours) {
+  const until = hours > 0 ? Math.floor(Date.now() / 1000) + hours * 3600 : 0;
+  try {
+    const a = await adminCall("POST", "/api/announcement", {
+      text, level: $("ann-level").value, until, pinned: $("ann-pinned").checked,
+    });
+    $("ann-msg").textContent = a.text ? "已发布" : "已撤销";
+    await loadAnnouncement();
+  } catch (e) { $("ann-msg").textContent = "发布失败：" + e; }
+}
+
+$("ann-save").onclick = () => saveAnnouncement($("ann-text").value.trim(),
+  parseInt($("ann-hours").value, 10) || 0);
+$("ann-clear").onclick = () => { $("ann-text").value = ""; return saveAnnouncement("", 0); };
+
+// 特性开关：按后端返回的键动态渲染，避免硬编码漏掉新增项
+async function loadFeatures() {
+  if (!invoke) return;
+  $("ftr-msg").textContent = "读取中…";
+  try {
+    const values = await adminCall("GET", "/api/features");
+    renderFeatures(values);
+  } catch (e) { $("ftr-msg").textContent = "读取失败：" + e; }
+}
+
+function renderFeatures(values) {
+  const keys = Object.keys(values || {});
+  if (!keys.length) { $("ftr-out").innerHTML = '<div class="hint">没有开关</div>'; return; }
+  $("ftr-out").innerHTML = keys.map((k) => `
+    <label style="display:flex;align-items:center;gap:8px;margin:8px 0;font-size:13px;color:inherit">
+      <input type="checkbox" data-ftr="${esc(k)}" ${values[k] ? "checked" : ""} style="width:auto" />
+      <code>${esc(k)}</code>
+    </label>`).join("");
+  $("ftr-msg").textContent = `${keys.length} 项`;
+}
+
+$("ftr-load").onclick = loadFeatures;
+$("ftr-out").addEventListener("change", async (ev) => {
+  const box = ev.target.closest("[data-ftr]");
+  if (!box) return;
+  try {
+    renderFeatures(await adminCall("POST", "/api/features", { [box.dataset.ftr]: box.checked }));
+    $("ftr-msg").textContent = "已保存";
+  } catch (e) { $("ftr-msg").textContent = "保存失败：" + e; }
+});
+
+// 诊断：指纹扫描（比对模型清单变动）
+$("fp-run").onclick = async () => {
+  if (!invoke) return;
+  $("fp-msg").textContent = "扫描中（逐个渠道拉模型清单）…";
+  try {
+    const r = await adminCall("POST", "/api/fingerprint", {});
+    const report = r.results || [];
+    const rows = (Array.isArray(report) ? report : []).map((c) => {
+      const changed = (c.added || []).length + (c.removed || []).length + (c.changed || []).length;
+      return `<tr>
+        <td style="padding:6px 8px">${esc(c.key_id || "-")}</td>
+        <td style="padding:6px 8px">${c.ok ? "正常" : '<span style="color:#d0483c">失败</span>'}</td>
+        <td style="padding:6px 8px">${(c.count ?? "-")}</td>
+        <td style="padding:6px 8px">${changed ? '<span style="color:#d4930d">有变动</span>' : "无变动"}</td>
+        <td style="padding:6px 8px">${esc(c.error || "")}</td>
+      </tr>`;
+    });
+    $("fp-out").innerHTML = rows.length
+      ? table(["渠道", "状态", "模型数", "变动", "错误"], rows)
+      : `<div class="hint">${esc(JSON.stringify(r).slice(0, 300))}</div>`;
+    $("fp-msg").textContent = "扫描完成";
+  } catch (e) { $("fp-msg").textContent = "扫描失败：" + e; }
+};
+
+// 诊断：服务商探活
+$("pb-run").onclick = async () => {
+  if (!invoke) return;
+  const provider = $("pb-provider").value.trim();
+  const apiKey = $("pb-key").value.trim();
+  if (!provider || !apiKey) { $("pb-msg").textContent = "服务商和 Key 都要填"; return; }
+  $("pb-msg").textContent = "探测中…";
+  $("pb-out").textContent = "";
+  try {
+    const r = await adminCall("POST", "/api/probe", {
+      provider, api_key: apiKey, base_url: $("pb-base").value.trim(),
+    });
+    $("pb-msg").textContent = r.ok === false ? "探测失败" : "探测完成";
+    $("pb-out").textContent = JSON.stringify(r, null, 2);
+  } catch (e) { $("pb-msg").textContent = "探测失败：" + e; }
+};
+

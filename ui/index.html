@@ -177,6 +177,49 @@
     <div id="aud-out" style="margin-top:10px;overflow-x:auto"></div>
   </section>
 
+  <section class="card" id="ann">
+    <strong>站点公告</strong>
+    <span class="hint">发布后所有页面顶部显示；文本清空即撤销。有效期按小时算，0 = 长期</span>
+    <textarea id="ann-text" rows="3" placeholder="例如：今晚 23:00 维护，预计 10 分钟" style="width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:transparent;color:inherit;font:inherit"></textarea>
+    <div class="row">
+      <select id="ann-level" style="padding:9px 10px;border-radius:8px;border:1px solid var(--line);background:transparent;color:inherit">
+        <option value="info">普通</option>
+        <option value="warning">警告</option>
+        <option value="critical">严重</option>
+      </select>
+      <input id="ann-hours" type="number" min="0" value="0" style="width:100px" placeholder="有效小时" />
+      <label style="margin:0;display:flex;align-items:center;gap:6px"><input id="ann-pinned" type="checkbox" style="width:auto" /> 置顶</label>
+      <button id="ann-save" class="primary">发布</button>
+      <button id="ann-clear">撤销</button>
+      <span class="hint" id="ann-msg"></span>
+    </div>
+  </section>
+
+  <section class="card" id="ftr">
+    <strong>特性开关</strong>
+    <span class="hint">站点级功能开关；保存后对后续请求生效</span>
+    <div class="row"><button id="ftr-load">刷新</button><span class="hint" id="ftr-msg"></span></div>
+    <div id="ftr-out" style="margin-top:10px"></div>
+  </section>
+
+  <section class="card" id="diag">
+    <strong>诊断</strong>
+    <span class="hint">模型指纹扫描会比对各渠道的模型清单；服务商探活直接打对方的模型/余额接口</span>
+    <div class="row">
+      <button id="fp-run">扫描模型指纹</button>
+      <span class="hint" id="fp-msg"></span>
+    </div>
+    <div id="fp-out" style="margin-top:10px;overflow-x:auto"></div>
+    <div class="row">
+      <input id="pb-provider" placeholder="服务商（如 openai）" style="width:180px" />
+      <input id="pb-key" placeholder="API Key" style="flex:1" />
+      <input id="pb-base" placeholder="Base URL（可选）" style="width:200px" />
+      <button id="pb-run">探活</button>
+    </div>
+    <div class="row"><span class="hint" id="pb-msg"></span></div>
+    <pre id="pb-out" class="hint" style="white-space:pre-wrap;margin-top:6px"></pre>
+  </section>
+
   <section class="card" id="thm">
     <strong>站点主题</strong>
     <span class="hint">仅接受 #rgb / #rrggbb 颜色；非颜色会被丢弃</span>
