@@ -1188,13 +1188,33 @@ function sshTarget() {
   return { host, keyPath };
 }
 
+// ssh 自身的失败（255）基本就这几类，直接把原因翻出来，别让人去猜网络
+const SSH_HINTS = [
+  [/Connection refused/i, "端口没开：服务没起、端口不对，或被防火墙拦了"],
+  [/Permission denied .publickey/i, "公钥没被服务器接受：私钥与服务器上的 authorized_keys 不匹配"],
+  [/Host key verification failed/i, "主机指纹和目标不一致：可能换了机器，或中间有人"],
+  [/Permissions 0[0-9]+ .*too open/i, "私钥权限太宽（Windows 上是文件 ACL）：收窄到仅本人可读再试"],
+  [/Could not resolve hostname/i, "主机名解析失败：检查拼写，或该域名只在内网可解析"],
+  [/Connection timed out|Operation timed out/i, "连不上：网络不通或被丢包"],
+  [/No such file or directory/i, "私钥路径不存在"],
+];
+
 function showSshResult(r) {
   const parts = [];
   parts.push(`退出码 ${r.exit} · ${r.ms}ms`);
   if (r.stdout) parts.push(r.stdout.trimEnd());
   if (r.stderr) parts.push("[stderr]\n" + r.stderr.trimEnd());
   $("ssh-out").textContent = parts.join("\n\n");
-  $("ssh-msg").textContent = r.ok ? "完成" : "命令返回非 0";
+
+  if (r.ok) { $("ssh-msg").textContent = "完成"; return; }
+  if (r.exit === 255) {
+    const hit = SSH_HINTS.find(([re]) => re.test(r.stderr || ""));
+    $("ssh-msg").textContent = hit
+      ? `连不上：${hit[1]}`
+      : "连不上：ssh 自身失败（原因见下方 stderr）";
+    return;
+  }
+  $("ssh-msg").textContent = `命令返回非 0（退出码 ${r.exit}）：是命令本身失败，不是连接问题`;
 }
 
 async function runPreset(id, label) {

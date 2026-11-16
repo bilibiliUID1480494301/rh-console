@@ -59,8 +59,6 @@
          box-shadow:0 0 0 3px var(--brand-weak); }
   input:disabled{ opacity:.55; }
 
-  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:0 var(--sp-3); }
-  @media (max-width:900px){ .grid2{ grid-template-columns:1fr; } }
   .row{ display:flex; gap:var(--sp-2); margin-top:var(--sp-3);
         flex-wrap:wrap; min-width:0; align-items:center; }
   .row > *{ min-width:0; max-width:100%; }
@@ -115,6 +113,33 @@
 
   #probe{ margin-top:var(--sp-2); font-size:13px; min-height:20px; }
   pre{ margin:0; font-size:12px; line-height:1.5; }
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:0 var(--sp-3); }
+  @media (max-width:900px){ .grid2{ grid-template-columns:1fr; } }
+
+  /* 输入框 + 贴在右边的按钮 */
+  .with-btn{ display:flex; gap:var(--sp-2); align-items:center; }
+  .with-btn input{ flex:1 1 auto; }
+  .with-btn button{ flex:0 0 auto; }
+
+  /* 预设动作：胶囊按钮一排，放不下就换行 */
+  .chips{ display:flex; flex-wrap:wrap; gap:6px; margin-top:var(--sp-2); }
+  .chips button{ height:30px; padding:0 12px; border-radius:999px;
+                 font-size:12.5px; color:var(--fg); }
+  .chips button:hover{ background:var(--brand-weak); border-color:var(--brand); color:var(--brand); }
+
+  /* 行内复选框 */
+  .check{ display:inline-flex; align-items:center; gap:6px; margin:0;
+          font-size:12.5px; color:var(--muted); white-space:nowrap; }
+  .check input{ width:auto; height:auto; margin:0; }
+
+  .row.tight{ margin-top:var(--sp-2); }
+
+  /* 命令输出区 */
+  pre.out{ margin-top:var(--sp-3); max-height:260px; overflow:auto;
+           background:var(--line-soft); border-radius:var(--r-md);
+           padding:10px 12px; font-size:12px; line-height:1.55;
+           font-family:ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; }
+  pre.out:empty{ display:none; }
 </style>
 </head>
 <body>
@@ -385,20 +410,33 @@
 
   <section class="card" id="ssh" data-group="sys">
     <strong>远程命令（SSH）</strong>
-    <span class="hint">预设动作的命令写死在程序里；自由命令需勾选高级模式、逐条确认，全部记入本地审计（app_data/ssh-audit.jsonl）</span>
-    <div class="row">
-      <input id="ssh-host" placeholder="root@1.2.3.4:22 或 myapp.up.railway.app@ssh.railway.com" style="flex:2 1 260px" />
-      <input id="ssh-key" placeholder="私钥路径（免密）" style="flex:2 1 220px" />
-      <button id="ssh-from-site" title="从上方「连接已有实例」的地址里取主机名">用站点主机</button>
+    <span class="hint">预设动作写在程序里；自由命令须开高级模式并逐条确认，全部记入本地审计 ssh-audit.jsonl</span>
+
+    <div class="grid2">
+      <div>
+        <label>主机</label>
+        <input id="ssh-host" placeholder="root@1.2.3.4:22 或 myapp.up.railway.app@ssh.railway.com" />
+      </div>
+      <div>
+        <label>私钥路径（需免密）</label>
+        <div class="with-btn">
+          <input id="ssh-key" placeholder="私钥文件路径，例如 ~/.ssh/id_ed25519" />
+          <button id="ssh-from-site" type="button" title="用上方「连接已有实例」里的主机名">用站点</button>
+        </div>
+      </div>
     </div>
-    <div class="row" id="ssh-presets"></div>
-    <div class="row">
-      <label style="margin:0;display:flex;align-items:center;gap:6px"><input id="ssh-adv" type="checkbox" style="width:auto" /> 高级模式（自由命令）</label>
-      <input id="ssh-cmd" placeholder="systemctl status relayhub" style="flex:1" disabled />
-      <button id="ssh-run" disabled>执行</button>
-      <span class="hint" id="ssh-msg"></span>
+
+    <label>预设动作</label>
+    <div class="chips" id="ssh-presets"></div>
+
+    <label>自由命令</label>
+    <label class="check"><input id="ssh-adv" type="checkbox" /> 高级模式（开启后可输入任意命令）</label>
+    <div class="with-btn" style="margin-top:8px">
+      <input id="ssh-cmd" placeholder="例如 ps aux | grep relayhub" disabled />
+      <button id="ssh-run" class="primary" disabled>执行</button>
     </div>
-    <pre id="ssh-out" class="hint" style="white-space:pre-wrap;margin-top:8px;max-height:280px;overflow:auto"></pre>
+    <div class="row tight"><span class="hint" id="ssh-msg"></span></div>
+    <pre id="ssh-out" class="out"></pre>
   </section>
 
   <section class="card" id="upd" data-group="sys">
