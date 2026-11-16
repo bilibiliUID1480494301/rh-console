@@ -1,4 +1,16 @@
 const $ = (id) => document.getElementById(id);
+
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function table(headers, rows) {
+  if (!rows.length) return '<div class="hint">暂无数据</div>';
+  const head = headers.map((h) =>
+    `<th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)">${h}</th>`).join("");
+  return `<table style="border-collapse:collapse;width:100%;font-size:13px">
+    <thead><tr>${head}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
+}
+
 const invoke = window.__TAURI__?.core?.invoke;
 let lastProbe = null;
 
@@ -16,7 +28,7 @@ function renderProbe(p) {
   let extra = "";
   if (p.status === "online") extra = ` · api ${p.api_compat} · ${p.latency_ms}ms`;
   if (p.detail) extra += ` · ${p.detail}`;
-  $("probe").innerHTML = `${dot}${LABEL[p.status] || p.status}${extra}`;
+  $("probe").innerHTML = `${dot}${esc(LABEL[p.status] || p.status)}${extra}`;
   $("save").disabled = !(p.status === "online" || p.status === "third_party");
 }
 
@@ -112,7 +124,7 @@ async function loadSites() {
     const row = document.createElement("div");
     row.className = "site";
     row.dataset.id = s.id;
-    row.innerHTML = `<div><span class="dot ${health[s.id] || ""}"></span>${s.label}${roleTag(s.role)}<br><small>${s.base_url} · ${s.username || ""}</small></div>`;
+    row.innerHTML = `<div><span class="dot ${health[s.id] || ""}"></span>${esc(s.label)}${roleTag(s.role)}<br><small>${esc(s.base_url)} · ${esc(s.username || "")}</small></div>`;
     const perm = document.createElement("button");
     perm.textContent = "权限";
     perm.className = "ghost";
@@ -267,8 +279,8 @@ function renderChannels(keys) {
   const box = $("ch-out");
   if (!keys.length) { box.innerHTML = '<div class="hint">没有渠道</div>'; return; }
   const rows = keys.map((k) => `<tr>
-    <td>${k.key_id || ""}</td><td>${k.label || ""}</td>
-    <td>${k.protocol || ""}</td>
+    <td>${esc(k.key_id || "")}</td><td>${esc(k.label || "")}</td>
+    <td>${esc(k.protocol || "")}</td>
     <td>${k.cooling_down_for > 0 ? "冷却 " + Math.round(k.cooling_down_for) + "s"
             : (k.enabled === false ? "已停用" : (k.available === false ? "不可用" : "正常"))}</td>
     <td>${(k.models || []).length}</td></tr>`).join("");
@@ -294,7 +306,7 @@ async function loadTokens() {
     if (!list.length) { box.innerHTML = '<div class="hint">没有令牌</div>'; return; }
     box.innerHTML = `<table style="border-collapse:collapse;width:100%;font-size:13px">
       <thead><tr><th>名称</th><th>尾号</th><th>状态</th><th>已用</th></tr></thead><tbody>${
-        list.map((t) => `<tr><td>${t.name || t.token_id}</td><td>…${t.tail || ""}</td>
+        list.map((t) => `<tr><td>${esc(t.name || t.token_id)}</td><td>…${esc(t.tail || "")}</td>
           <td>${t.disabled ? "停用" : "启用"}</td><td>${t.used ?? t.requests ?? "-"}</td></tr>`).join("")
       }</tbody></table>`;
   } catch (e) {
@@ -341,7 +353,7 @@ async function checkSecurity() {
     }));
   } catch (e) {
     const box = document.getElementById("sec");
-    if (box) box.innerHTML = `<div class="hint">安全检查失败：${e}</div>`;
+    if (box) box.innerHTML = `<div class="hint">安全检查失败：${esc(e)}</div>`;
   }
 }
 
@@ -375,7 +387,7 @@ async function loadUsage() {
     walk(data, "");
     $("usg-msg").textContent = `${flat.length} 个字段`;
     $("usg-out").innerHTML = `<table style="border-collapse:collapse;width:100%;font-size:13px">
-      <tbody>${flat.map(([k, v]) => `<tr><td style="color:#6b7280;padding-right:12px">${k}</td><td>${v}</td></tr>`).join("")}</tbody></table>`;
+      <tbody>${flat.map(([k, v]) => `<tr><td style="color:#6b7280;padding-right:12px">${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</tbody></table>`;
   } catch (e) {
     $("usg-msg").textContent = "读取失败：" + e;
   }
@@ -396,9 +408,9 @@ async function loadRequests() {
     if (!rows.length) { box.innerHTML = '<div class="hint">暂无记录</div>'; return; }
     const cols = Object.keys(rows[0]).slice(0, 8);
     box.innerHTML = `<table style="border-collapse:collapse;width:100%;font-size:12px">
-      <thead><tr>${cols.map((c) => `<th style="text-align:left;padding:4px 8px">${c}</th>`).join("")}</tr></thead>
+      <thead><tr>${cols.map((c) => `<th style="text-align:left;padding:4px 8px">${esc(c)}</th>`).join("")}</tr></thead>
       <tbody>${rows.slice(0, 50).map((r) => `<tr>${cols.map((c) =>
-        `<td style="padding:4px 8px">${String(r[c] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+        `<td style="padding:4px 8px">${esc(String(r[c] ?? ""))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
   } catch (e) {
     $("log-msg").textContent = "读取失败：" + e;
   }
@@ -659,17 +671,6 @@ const depBtn = document.getElementById("dep-run");
 if (depBtn) depBtn.onclick = runDeploy;
 
 // ---- 接入策略 / 兑换码 / 用户 / 客户端 / 审计 ----
-const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
-  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-
-function table(headers, rows) {
-  if (!rows.length) return '<div class="hint">暂无数据</div>';
-  const head = headers.map((h) =>
-    `<th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)">${h}</th>`).join("");
-  return `<table style="border-collapse:collapse;width:100%;font-size:13px">
-    <thead><tr>${head}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
-}
-
 async function adminCall(method, path, body) {
   return invoke("admin_call", {
     baseUrl: $("base").value, username: $("user").value, password: $("pass").value,
@@ -1166,4 +1167,73 @@ $("upd-rollback").onclick = async () => {
     const r = await adminCall("POST", "/api/update/rollback", {});
     $("upd-msg").textContent = "已回滚" + (r && r.version ? ` 到 ${r.version}` : "");
   } catch (e) { $("upd-msg").textContent = "回滚失败：" + e; }
+};
+
+// ---- 远程命令（SSH）----
+// 预设只传 id，命令串在 Rust 侧（SSH_PRESETS）；自由命令要过确认。
+const SSH_PRESETS_UI = [
+  ["version", "版本"],
+  ["probe", "健康探测"],
+  ["ports", "监听端口"],
+  ["disk", "磁盘与内存"],
+  ["logs", "最近日志"],
+  ["restart", "重启服务"],
+];
+
+function sshTarget() {
+  const host = $("ssh-host").value.trim();
+  const keyPath = $("ssh-key").value.trim();
+  if (!host || !keyPath) { $("ssh-msg").textContent = "主机和私钥都要填"; return null; }
+  return { host, keyPath };
+}
+
+function showSshResult(r) {
+  const parts = [];
+  parts.push(`退出码 ${r.exit} · ${r.ms}ms`);
+  if (r.stdout) parts.push(r.stdout.trimEnd());
+  if (r.stderr) parts.push("[stderr]\n" + r.stderr.trimEnd());
+  $("ssh-out").textContent = parts.join("\n\n");
+  $("ssh-msg").textContent = r.ok ? "完成" : "命令返回非 0";
+}
+
+async function runPreset(id, label) {
+  const target = sshTarget();
+  if (!target) return;
+  if (id === "restart" && !confirm(`在 ${target.host} 上重启 relay-hub 服务？`)) return;
+  $("ssh-msg").textContent = `${label}…`;
+  $("ssh-out").textContent = "";
+  try {
+    showSshResult(await invoke("ssh_preset", { ...target, preset: id }));
+  } catch (e) { $("ssh-msg").textContent = "失败：" + e; }
+}
+
+(function buildSshPresets() {
+  const box = $("ssh-presets");
+  if (!box) return;
+  for (const [id, label] of SSH_PRESETS_UI) {
+    const btn = document.createElement("button");
+    btn.textContent = label;
+    btn.onclick = () => runPreset(id, label);
+    box.appendChild(btn);
+  }
+})();
+
+$("ssh-adv").onchange = () => {
+  const on = $("ssh-adv").checked;
+  $("ssh-cmd").disabled = !on;
+  $("ssh-run").disabled = !on;
+  $("ssh-msg").textContent = on ? "高级模式：命令会原样交给远端 shell" : "";
+};
+
+$("ssh-run").onclick = async () => {
+  const target = sshTarget();
+  if (!target) return;
+  const command = $("ssh-cmd").value.trim();
+  if (!command) { $("ssh-msg").textContent = "命令不能为空"; return; }
+  if (!confirm(`在 ${target.host} 上执行：\n\n${command}`)) return;
+  $("ssh-msg").textContent = "执行中…";
+  $("ssh-out").textContent = "";
+  try {
+    showSshResult(await invoke("ssh_run", { ...target, command }));
+  } catch (e) { $("ssh-msg").textContent = "失败：" + e; }
 };

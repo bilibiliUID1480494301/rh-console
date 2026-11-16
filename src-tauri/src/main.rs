@@ -233,6 +233,140 @@ async fn admin_call(
     serde_json::from_str(&text).or_else(|_| Ok(serde_json::json!({"raw": text})))
 }
 
+// ---- 远程命令（SSH） -------------------------------------------------------
+// 安全模型：
+// 1. 预设动作的命令串写在代码里（SSH_PRESETS），UI 只能选 id，不能传命令；
+// 2. 自由命令必须由用户在「高级模式」里逐条确认，且每站点单独放行；
+// 3. 命令通过 ssh 的 argv 直传（不做本地 shell 拼接），无非必要转义；
+// 4. 每次执行都写本地审计（时间/主机/命令/退出码/耗时），便于事后追。
+pub const SSH_PRESETS: &[(&str, &str, &str, bool)] = &[
+    ("version", "版本", "python3 -m relayhub.gateway --version 2>/dev/null || hubrelay --version", false),
+    ("probe", "健康探测", "curl -s -o /dev/null -m 3 -w '%{http_code}' http://127.0.0.1:8799/v1/messages || echo 不通", false),
+    ("ports", "监听端口", "ss -ltnp 2>/dev/null | grep -E ':(8799|18802)' || netstat -ltn 2>/dev/null | grep -E ':(8799|18802)' || echo 没看到 8799/18802 在听", false),
+    ("disk", "磁盘与内存", "df -h / /opt/hubrelay 2>/dev/null; free -m 2>/dev/null", false),
+    ("logs", "最近日志", "journalctl -u relayhub -n 100 --no-pager 2>/dev/null || tail -n 100 /var/log/relayhub.log 2>/dev/null || echo 找不到日志", false),
+    ("restart", "重启服务", "systemctl restart relayhub 2>/dev/null && echo 已重启systemd || echo 非systemd部署请自行重启", true),
+];
+
+fn ssh_audit(app: &tauri::AppHandle, entry: &serde_json::Value) -> Result<(), String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("ssh-audit.jsonl");
+    let mut line = serde_json::to_string(entry).map_err(|e| e.to_string())?;
+    line.push('\n');
+    use std::io::Write;
+    let mut fh = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    fh.write_all(line.as_bytes()).map_err(|e| e.to_string())
+}
+
+fn ssh_check_host(host: &str) -> Result<(), String> {
+    if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || "@.-_:".contains(c)) {
+        return Err("host 只允许字母数字与 @ . - _ :".into());
+    }
+    Ok(())
+}
+
+fn ssh_check_command(command: &str) -> Result<(), String> {
+    if command.trim().is_empty() {
+        return Err("命令不能为空".into());
+    }
+    if command.len() > 2000 {
+        return Err("命令太长（上限 2000 字节）".into());
+    }
+    if command.contains('\0') {
+        return Err("命令含非法字符".into());
+    }
+    Ok(())
+}
+
+/// 执行一条远端命令。argv 直传：不做本地 shell 拼接，避免本地注入。
+fn ssh_exec(host: &str, key_path: &str, command: &str) -> Result<(i32, String, String, u128), String> {
+    let started = std::time::Instant::now();
+    let out = std::process::Command::new("ssh")
+        .args([
+            "-i", key_path,
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=accept-new",
+            host,
+            command,
+        ])
+        .output()
+        .map_err(|e| format!("调用 ssh 失败：{e}"))?;
+    let code = out.status.code().unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok((code, stdout, stderr, started.elapsed().as_millis()))
+}
+
+#[tauri::command]
+async fn ssh_preset(
+    app: tauri::AppHandle,
+    host: String,
+    key_path: String,
+    preset: String,
+) -> Result<serde_json::Value, String> {
+    ssh_check_host(&host)?;
+    let (_, label, command, needs_confirm) = SSH_PRESETS
+        .iter()
+        .find(|(id, ..)| *id == preset)
+        .copied()
+        .ok_or_else(|| format!("未知预设 {preset}"))?;
+    let (code, stdout, stderr, ms) = ssh_exec(&host, &key_path, command)?;
+    ssh_audit(&app, &serde_json::json!({
+        "ts": now_secs(), "host": host, "kind": "preset", "preset": preset,
+        "label": label, "needs_confirm": needs_confirm, "command": command,
+        "exit": code, "ms": ms,
+    }))?;
+    Ok(serde_json::json!({
+        "ok": code == 0, "exit": code, "stdout": stdout,
+        "stderr": truncate_tail(&stderr, 4000), "ms": ms, "label": label,
+    }))
+}
+
+#[tauri::command]
+async fn ssh_run(
+    app: tauri::AppHandle,
+    host: String,
+    key_path: String,
+    command: String,
+) -> Result<serde_json::Value, String> {
+    ssh_check_host(&host)?;
+    ssh_check_command(&command)?;
+    let (code, stdout, stderr, ms) = ssh_exec(&host, &key_path, &command)?;
+    ssh_audit(&app, &serde_json::json!({
+        "ts": now_secs(), "host": host, "kind": "custom", "command": command,
+        "exit": code, "ms": ms,
+    }))?;
+    Ok(serde_json::json!({
+        "ok": code == 0, "exit": code, "stdout": stdout,
+        "stderr": truncate_tail(&stderr, 4000), "ms": ms,
+    }))
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn truncate_tail(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let skip = text.chars().count() - limit;
+    format!(
+        "…（前面省略 {} 字）\n{}",
+        skip,
+        text.chars().skip(skip).collect::<String>()
+    )
+}
+
 #[tauri::command]
 fn doctor_local() -> Result<serde_json::Value, String> {
     // doctor 只对本机有意义（查的是本机 Python/端口/数据目录），远程实例不该由它代跑
@@ -801,6 +935,8 @@ fn main() {
             admin_get,
             admin_post,
             admin_call,
+            ssh_preset,
+            ssh_run,
             doctor_local,
             remote_deploy,
             site_remove,
@@ -816,6 +952,47 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn ssh_presets_are_well_formed() {
+        let mut ids = std::collections::HashSet::new();
+        for (id, label, command, needs_confirm) in SSH_PRESETS {
+            assert!(ids.insert(*id), "预设 id 重复：{id}");
+            assert!(!label.is_empty(), "{id} 没有中文标签");
+            assert!(!command.trim().is_empty(), "{id} 命令为空");
+            assert!(!command.contains('\u{0}'), "{id} 命令含 NUL");
+        }
+        let restart = SSH_PRESETS.iter().find(|(id, ..)| *id == "restart").unwrap();
+        assert!(restart.3, "restart 必须标记 needs_confirm");
+        assert!(SSH_PRESETS.iter().filter(|(id, ..)| *id != "restart").count() >= 4);
+    }
+
+    #[test]
+    fn ssh_command_validation() {
+        assert!(ssh_check_command("   ").is_err());
+        assert!(ssh_check_command("").is_err());
+        assert!(ssh_check_command("ls\u{0}").is_err());
+        assert!(ssh_check_command(&"a".repeat(2001)).is_err());
+        assert!(ssh_check_command("systemctl status relayhub").is_ok());
+    }
+
+    #[test]
+    fn ssh_host_validation() {
+        assert!(ssh_check_host("root@1.2.3.4").is_ok());
+        assert!(ssh_check_host("user@host:2222").is_ok());
+        assert!(ssh_check_host("host; rm -rf /").is_err());
+        assert!(ssh_check_host("").is_err());
+    }
+
+    #[test]
+    fn truncate_keeps_the_tail() {
+        let text: String = (0..100).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
+        let cut = truncate_tail(&text, 10);
+        assert!(cut.contains("前面省略 90 字"));
+        assert!(cut.ends_with(&text[text.len() - 10..]));
+        assert_eq!(truncate_tail("short", 10), "short");
+    }
+
     use super::*;
 
     #[test]

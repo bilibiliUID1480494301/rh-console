@@ -295,6 +295,23 @@ main > aside{grid-column:2;grid-row:1 / span 2;position:sticky;top:12px;align-se
     </div>
   </section>
 
+  <section class="card" id="ssh" data-group="sys">
+    <strong>远程命令（SSH）</strong>
+    <span class="hint">预设动作的命令写死在程序里；自由命令需勾选高级模式、逐条确认，全部记入本地审计（app_data/ssh-audit.jsonl）</span>
+    <div class="row">
+      <input id="ssh-host" placeholder="root@1.2.3.4" style="flex:1" />
+      <input id="ssh-key" placeholder="私钥路径（免密）" style="flex:1" />
+    </div>
+    <div class="row" id="ssh-presets"></div>
+    <div class="row">
+      <label style="margin:0;display:flex;align-items:center;gap:6px"><input id="ssh-adv" type="checkbox" style="width:auto" /> 高级模式（自由命令）</label>
+      <input id="ssh-cmd" placeholder="systemctl status relayhub" style="flex:1" disabled />
+      <button id="ssh-run" disabled>执行</button>
+      <span class="hint" id="ssh-msg"></span>
+    </div>
+    <pre id="ssh-out" class="hint" style="white-space:pre-wrap;margin-top:8px;max-height:280px;overflow:auto"></pre>
+  </section>
+
   <section class="card" id="upd" data-group="sys">
     <strong>版本回滚</strong>
     <span class="hint">退回上一版是装坏后的唯一止损手段；只对站长开放</span>
