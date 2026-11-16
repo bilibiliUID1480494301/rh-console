@@ -34,18 +34,25 @@
 .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#c3c8d0;margin-right:7px;vertical-align:middle}
 .dot.ok{background:#2e9e6b}.dot.warn{background:#d4930d}.dot.bad{background:#d0483c}
 .site{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.tabs{display:flex;gap:6px;padding:0 32px 6px;flex-wrap:wrap}
+.tabs button[aria-selected="true"]{background:var(--brand);border-color:var(--brand);color:#fff}
+.pane{display:contents}.pane[hidden]{display:none}
+/* 站点列表（含探活状态灯）固定在右列顶部，不随页签内容长度漂移 */
+main > aside{grid-column:2;grid-row:1 / span 2;position:sticky;top:12px;align-self:start}
+.subblock{margin-top:8px;padding-left:14px;border-left:2px solid var(--line)}
 </style>
 </head>
 <body>
 <header>
   <h1>管理你的本地或远程 relay-hub 实例</h1>
-  <div class="sub">不代理流量、不存储上游 Key · 密码存系统钥匙串</div>
+  <div class="sub">不代理流量、不存储上游 Key · 密码存系统钥匙串<span id="agg" style="margin-left:12px;white-space:nowrap"><i class="dot" id="agg-dot"></i><span id="agg-txt">未连接</span></span></div>
   <div id="live" class="hint"></div>
   <div id="sec" style="margin-top:8px"></div>
 </header>
 
+<nav class="tabs" id="tabs" role="tablist"></nav>
 <main>
-  <section class="card">
+  <section class="card" id="conn-card" data-group="conn">
     <strong>连接已有实例</strong>
     <label>地址</label>
     <input id="base" placeholder="http://127.0.0.1:18802 或 https://your.site" />
@@ -64,61 +71,61 @@
       可选端口、监听地址、管理 Token、数据目录与开机自启；不捆绑运行时、不需要 Docker。</p>
       <button id="create">检测并启动实例</button>
       <span class="hint" id="createMsg"></span>
+      <hr style="border:0;border-top:1px solid var(--line);margin:16px 0" />
+<div id="dep-card" class="subblock">
+          <strong>或：部署到远程主机</strong>
+          <span class="hint">先本地验签（ed25519）再传，哈希不符会拒绝；装完自动探活，pip 模式失败会尝试回滚</span>
+          <label>主机（user@host[:port]）</label>
+          <input id="dep-host" placeholder="root@1.2.3.4" />
+          <label>私钥路径（需免密，不能被口令保护）</label>
+          <input id="dep-key" placeholder="C:\Users\you\.ssh\id_ed25519" />
+          <label>版本</label>
+          <input id="dep-ver" placeholder="0.12.31" />
+          <div class="row">
+            <label style="margin:0"><input type="radio" name="depmode" value="pip" checked /> pip</label>
+            <label style="margin:0"><input type="radio" name="depmode" value="docker" /> docker</label>
+          </div>
+          <label>数据目录（docker 模式用，默认 /opt/hubrelay）</label>
+          <input id="dep-dir" placeholder="/opt/hubrelay" />
+          <div class="row"><button id="dep-run" class="primary">部署</button><span class="hint" id="dep-msg"></span></div>
+          <pre id="dep-out" class="hint" style="white-space:pre-wrap;margin-top:8px"></pre>
+        </div>
     </details>
   </section>
 
-  <section class="card" id="dep-card">
-    <strong>远程部署</strong>
-    <span class="hint">先本地验签（ed25519）再传，哈希不符会拒绝；装完自动探活，pip 模式失败会尝试回滚</span>
-    <label>主机（user@host[:port]）</label>
-    <input id="dep-host" placeholder="root@1.2.3.4" />
-    <label>私钥路径（需免密，不能被口令保护）</label>
-    <input id="dep-key" placeholder="C:\Users\you\.ssh\id_ed25519" />
-    <label>版本</label>
-    <input id="dep-ver" placeholder="0.12.31" />
-    <div class="row">
-      <label style="margin:0"><input type="radio" name="depmode" value="pip" checked /> pip</label>
-      <label style="margin:0"><input type="radio" name="depmode" value="docker" /> docker</label>
-    </div>
-    <label>数据目录（docker 模式用，默认 /opt/hubrelay）</label>
-    <input id="dep-dir" placeholder="/opt/hubrelay" />
-    <div class="row"><button id="dep-run" class="primary">部署</button><span class="hint" id="dep-msg"></span></div>
-    <pre id="dep-out" class="hint" style="white-space:pre-wrap;margin-top:8px"></pre>
-  </section>
-
-  <section class="card" id="perm-card">
+  <section class="card" id="perm-card" data-group="ch">
     <strong>权限分配 <span class="hint" id="perm-title"></span></strong>
     <span class="hint">改站内用户角色。只有 admin/owner 身份能读列表；授予管理员只有站长可以</span>
     <div id="perm-body" style="margin-top:10px"><p class="hint">在下面站点列表点「权限」</p></div>
   </section>
 
-  <section class="card" id="ov-card">
+  <section class="card" id="ov-card" data-group="conn">
     <strong>多站点总览</strong>
     <span class="hint">一次把所有站点拉齐 —— 网页版一次只能登一个站</span>
     <div class="row"><button id="ov-run">刷新总览</button><span class="hint" id="ov-msg"></span></div>
     <div id="ov" style="margin-top:10px"></div>
   </section>
 
-  <section class="card" id="doc">
+  <section class="card" id="doc" data-group="conn">
     <strong>本机自检（doctor）</strong>
     <span class="hint">检查本机 Python / 数据目录 / 端口，不针对远程站点</span>
     <div class="row"><button id="doc-run">运行自检</button><span class="hint" id="doc-msg"></span></div>
     <div id="doc-out" style="margin-top:10px"></div>
   </section>
 
-  <section class="card" id="ch">
+  <section class="card" id="ch" data-group="ch">
     <strong>渠道</strong>
     <div class="row"><button id="ch-load">刷新</button><span class="hint" id="ch-msg"></span></div>
     <div id="ch-out" style="margin-top:10px;overflow-x:auto"></div>
   </section>
 
-  <section class="card" id="tk">
+  <section class="card" id="tk" data-group="ch">
     <strong>令牌</strong>
     <div class="row"><button id="tk-load">刷新</button><span class="hint" id="tk-msg"></span></div>
     <div id="tk-out" style="margin-top:10px;overflow-x:auto"></div>
   </section>
 
-  <section class="card" id="pol">
+  <section class="card" id="pol" data-group="ops">
     <strong>接入策略</strong>
     <span class="hint">拉黑立即生效（按 IP 或客户端身份），优先队列让指定来源排在普通请求之前</span>
     <div class="row">
@@ -138,7 +145,7 @@
     <div id="pol-out" style="margin-top:10px;overflow-x:auto"></div>
   </section>
 
-  <section class="card" id="code">
+  <section class="card" id="code" data-group="bill">
     <strong>兑换码</strong>
     <span class="hint">明文只在生成时回显一次；作废后不可恢复</span>
     <div class="row">
@@ -153,21 +160,21 @@
     <div id="code-out" style="margin-top:10px;overflow-x:auto"></div>
   </section>
 
-  <section class="card" id="usr">
+  <section class="card" id="usr" data-group="bill">
     <strong>用户</strong>
     <span class="hint">改额度 / 停用 / 删除。停用会自动吊销该用户的自建通行证</span>
     <div class="row"><button id="usr-load">刷新</button><span class="hint" id="usr-msg"></span></div>
     <div id="usr-out" style="margin-top:10px;overflow-x:auto"></div>
   </section>
 
-  <section class="card" id="cl">
+  <section class="card" id="cl" data-group="ops">
     <strong>客户端总览</strong>
     <span class="hint">按用户与设备聚合的请求来源；不展示下游用户的客户端名（隐私口径）</span>
     <div class="row"><button id="cl-load">刷新</button><span class="hint" id="cl-msg"></span></div>
     <div id="cl-out" style="margin-top:10px;overflow-x:auto"></div>
   </section>
 
-  <section class="card" id="aud">
+  <section class="card" id="aud" data-group="ops">
     <strong>审计</strong>
     <span class="hint">管理面写操作的留痕：策略、用户、兑换码、升级等</span>
     <div class="row">
@@ -177,7 +184,7 @@
     <div id="aud-out" style="margin-top:10px;overflow-x:auto"></div>
   </section>
 
-  <section class="card" id="ann">
+  <section class="card" id="ann" data-group="ops">
     <strong>站点公告</strong>
     <span class="hint">发布后所有页面顶部显示；文本清空即撤销。有效期按小时算，0 = 长期</span>
     <textarea id="ann-text" rows="3" placeholder="例如：今晚 23:00 维护，预计 10 分钟" style="width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:transparent;color:inherit;font:inherit"></textarea>
@@ -195,14 +202,14 @@
     </div>
   </section>
 
-  <section class="card" id="ftr">
+  <section class="card" id="ftr" data-group="sys">
     <strong>特性开关</strong>
     <span class="hint">站点级功能开关；保存后对后续请求生效</span>
     <div class="row"><button id="ftr-load">刷新</button><span class="hint" id="ftr-msg"></span></div>
     <div id="ftr-out" style="margin-top:10px"></div>
   </section>
 
-  <section class="card" id="diag">
+  <section class="card" id="diag" data-group="sys">
     <strong>诊断</strong>
     <span class="hint">模型指纹扫描会比对各渠道的模型清单；服务商探活直接打对方的模型/余额接口</span>
     <div class="row">
@@ -220,7 +227,7 @@
     <pre id="pb-out" class="hint" style="white-space:pre-wrap;margin-top:6px"></pre>
   </section>
 
-  <section class="card" id="thm">
+  <section class="card" id="thm" data-group="sys">
     <strong>站点主题</strong>
     <span class="hint">仅接受 #rgb / #rrggbb 颜色；非颜色会被丢弃</span>
     <div class="row">
@@ -231,13 +238,13 @@
     </div>
   </section>
 
-  <section class="card" id="usg">
+  <section class="card" id="usg" data-group="ch">
     <strong>用量</strong>
     <div class="row"><button id="usg-load">刷新</button><span class="hint" id="usg-msg"></span></div>
     <div id="usg-out" style="margin-top:10px;overflow-x:auto"></div>
   </section>
 
-  <section class="card" id="log">
+  <section class="card" id="log" data-group="ch">
     <strong>请求日志</strong>
     <div class="row"><button id="log-load">刷新</button><span class="hint" id="log-msg"></span></div>
     <div id="log-out" style="margin-top:10px;overflow-x:auto"></div>
@@ -253,6 +260,85 @@
       <span class="hint" id="plug-msg"></span>
     </div>
     <div id="plug-out" style="margin-top:10px;overflow-x:auto"></div>
+  </section>
+
+  <section class="card" id="ovs" data-group="bill">
+    <strong>余额预警</strong>
+    <span class="hint">已售出额度 − 上游余额 = 超卖；余额未知时不做预测（纯计算，不联网）</span>
+    <div class="row"><button id="ovs-load">刷新</button><span class="hint" id="ovs-msg"></span></div>
+    <div id="ovs-out" style="margin-top:10px;overflow-x:auto"></div>
+  </section>
+
+  <section class="card" id="wui" data-group="sys">
+    <strong>网页外观</strong>
+    <span class="hint">背景色只接受 #RGB / #RRGGBB / #RRGGBBAA；背景图必须是 http(s) 图片地址</span>
+    <div class="row">
+      <input id="wui-color" placeholder="#0b1220" style="width:130px" />
+      <input id="wui-image" placeholder="https://…/wallpaper.jpg" style="flex:1" />
+      <select id="wui-mode" style="padding:9px 10px;border-radius:8px;border:1px solid var(--line);background:transparent;color:inherit">
+        <option value="static">静态</option>
+        <option value="rotate">轮播</option>
+      </select>
+      <button id="wui-load">读取</button>
+      <button id="wui-save" class="primary">保存</button>
+      <span class="hint" id="wui-msg"></span>
+    </div>
+  </section>
+
+  <section class="card" id="set" data-group="sys">
+    <strong>站点名称</strong>
+    <span class="hint">显示在页面标题与公告区；改名不牵动号池</span>
+    <div class="row">
+      <input id="set-name" placeholder="我的中转站" style="flex:1" />
+      <button id="set-save" class="primary">保存</button>
+      <span class="hint" id="set-msg"></span>
+    </div>
+  </section>
+
+  <section class="card" id="upd" data-group="sys">
+    <strong>版本回滚</strong>
+    <span class="hint">退回上一版是装坏后的唯一止损手段；只对站长开放</span>
+    <div class="row"><button id="upd-rollback">回滚到上一版</button><span class="hint" id="upd-msg"></span></div>
+  </section>
+
+  <section class="card" id="mig" data-group="sys">
+    <strong>迁移包</strong>
+    <span class="hint">导出口令必填（包体会加密）；带密钥的包不能在线导入，须停机后用 CLI 导入</span>
+    <div class="row">
+      <input id="mig-pass" type="password" placeholder="导出口令" style="width:180px" />
+      <label style="margin:0;display:flex;align-items:center;gap:6px"><input id="mig-secrets" type="checkbox" style="width:auto" /> 含上游 Key</label>
+      <button id="mig-export" class="primary">导出并下载</button>
+      <span class="hint" id="mig-msg"></span>
+    </div>
+    <div class="row">
+      <textarea id="mig-json" rows="3" placeholder="粘贴迁移包 JSON 可预演导入" style="width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:transparent;color:inherit;font:inherit"></textarea>
+    </div>
+    <div class="row">
+      <button id="mig-dry">预演导入</button>
+      <span class="hint" id="mig-dry-msg"></span>
+    </div>
+  </section>
+
+  <section class="card" id="rec" data-group="sys">
+    <strong>两步验证恢复码</strong>
+    <span class="hint">只有站长可用；生成后旧码全部作废，新码只显示这一次</span>
+    <div class="row">
+      <button id="rec-load">查看剩余</button>
+      <button id="rec-gen" class="primary">重新生成</button>
+      <span class="hint" id="rec-msg"></span>
+    </div>
+    <pre id="rec-out" class="hint" style="white-space:pre-wrap;margin-top:8px"></pre>
+  </section>
+
+  <section class="card" id="drf" data-group="sys">
+    <strong>漂移与探活记录</strong>
+    <span class="hint">响应特征变化只代表上游实现/口径变了，不代表模型变差</span>
+    <div class="row">
+      <button id="drf-load">刷新</button>
+      <input id="drf-probe" placeholder="探活模型 ID（可选，用来看原始回答）" style="flex:1" />
+      <span class="hint" id="drf-msg"></span>
+    </div>
+    <div id="drf-out" style="margin-top:10px;overflow-x:auto"></div>
   </section>
 
   <aside class="card">

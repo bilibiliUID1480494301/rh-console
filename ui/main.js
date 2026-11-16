@@ -66,6 +66,24 @@ async function healthDots(sites) {
     const row = document.querySelector(`.site[data-id="${s.id}"] .dot`);
     if (row) row.className = "dot " + (health[s.id] || "");
   }
+  renderAggregate(sites);
+}
+
+// 顶部汇总灯：一眼看出「几台在线」，不用逐条数站点列表
+function renderAggregate(sites) {
+  const dotEl = document.getElementById("agg-dot");
+  const txtEl = document.getElementById("agg-txt");
+  if (!dotEl || !txtEl) return;
+  if (!sites.length) {
+    dotEl.className = "dot";
+    txtEl.textContent = "未连接";
+    return;
+  }
+  const states = sites.map((s) => health[s.id] || "");
+  const ok = states.filter((v) => v === "ok").length;
+  const bad = states.filter((v) => v === "bad").length;
+  dotEl.className = "dot " + (ok === sites.length ? "ok" : bad ? "bad" : "warn");
+  txtEl.textContent = `${ok}/${sites.length} 在线`;
 }
 
 // 管理面三档（scope 矩阵）：owner 全权 / admin 只读 / viewer 更少
@@ -404,7 +422,9 @@ $("thm-save").onclick = async () => {
   }
 };
 
-// ---- 一键升级（服务端验签，失败即拒；强制跳过必须写理由） ----
+// ---- 一键升级（服务端验签，失败即拒；强制跳过必须写理由并进审计） ----
+// 跳过通道不能删：签名密钥轮换、自建包、上游发版事故都需要它。
+// 但必须是一次显式决定——要求写理由（>=8 字），服务端记 update.forced。
 async function doUpgrade(version) {
   const msg = document.getElementById("up-msg");
   const btn = document.getElementById("up-btn");
@@ -426,14 +446,24 @@ async function doUpgrade(version) {
     return;
   } catch (e) {
     const text = String(e);
-    if (!text.includes("409")) { if (msg) msg.textContent = "升级失败：" + text; if (btn) btn.disabled = false; return; }
-    // 验签未通过：问一次，理由必须写清，服务端会记 update.forced 审计
+    if (!text.includes("409")) {
+      if (msg) msg.textContent = "升级失败：" + text;
+      if (btn) btn.disabled = false;
+      return;
+    }
     if (msg) msg.textContent = "验签未通过";
     const NL = String.fromCharCode(10);
-    const reason = window.prompt("验签未通过：" + text.slice(0, 160) + NL + NL + "确认仍要安装请输入原因（至少 8 字，会记入审计）：");
+    const reason = window.prompt(
+      "验签未通过：" + text.slice(0, 160) + NL + NL +
+      "确知风险、仍要安装请输入原因（至少 8 字，会写进 update.forced 审计）：");
     if (!reason) { if (btn) btn.disabled = false; return; }
+    if (reason.trim().length < 8) {
+      if (msg) msg.textContent = "原因太短（至少 8 字），已取消";
+      if (btn) btn.disabled = false;
+      return;
+    }
     try {
-      const r = await call({ force: true, reason });
+      await call({ force: true, reason: reason.trim() });
       if (msg) msg.textContent = `已强制安装 ${version}（未验签，已记审计）`;
     } catch (e2) {
       if (msg) msg.textContent = "强制安装也失败：" + e2;
@@ -952,3 +982,188 @@ $("pb-run").onclick = async () => {
   } catch (e) { $("pb-msg").textContent = "探测失败：" + e; }
 };
 
+// ---- 页签分组：按 data-group 把卡片收进五个面板 ----
+const GROUP_TABS = [
+  ["conn", "连接与部署"],
+  ["ops", "运营"],
+  ["bill", "计费"],
+  ["ch", "渠道与流量"],
+  ["sys", "系统"],
+];
+
+function buildTabs() {
+  const main = document.querySelector("main");
+  const nav = document.getElementById("tabs");
+  if (!main || !nav) return;
+  const aside = main.querySelector("aside");
+  const cards = Array.from(main.querySelectorAll(":scope > section.card"));
+  const panes = {};
+  for (const [key, label] of GROUP_TABS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = label;
+    btn.setAttribute("role", "tab");
+    btn.dataset.tabK = key;
+    btn.onclick = () => select(key);
+    nav.appendChild(btn);
+    const pane = document.createElement("div");
+    pane.className = "pane";
+    pane.dataset.pane = key;
+    main.insertBefore(pane, aside);
+    panes[key] = pane;
+  }
+  for (const card of cards) {
+    const key = card.dataset.group || "conn";
+    (panes[key] || panes.conn).appendChild(card);
+  }
+  function select(key) {
+    for (const [k] of GROUP_TABS) {
+      panes[k].hidden = k !== key;
+      const btn = nav.querySelector(`[data-tab-k="${k}"]`);
+      if (btn) btn.setAttribute("aria-selected", String(k === key));
+    }
+  }
+  select("conn");
+}
+
+buildTabs();
+
+// ---- 余额预警 ----
+async function loadOversell() {
+  if (!invoke) return;
+  $("ovs-msg").textContent = "计算中…";
+  try {
+    const d = await adminCall("GET", "/api/oversell");
+    const up = d.upstream || {};
+    const down = d.downstream || {};
+    const rows = [
+      ["下游已售出余额", down.balance ?? "-"],
+      ["上游余额", up.balance ?? "未知"],
+      ["超卖", (down.balance ?? 0) - (up.balance ?? 0)],
+      ["日均消耗", d.per_day ?? "-"],
+      ["上游预计耗尽（天）", up.days ?? "-"],
+      ["预警阈值（天）", d.warn_days ?? "-"],
+    ];
+    $("ovs-out").innerHTML = table(["指标", "值"],
+      rows.map(([k, v]) => `<tr><td style="padding:6px 8px">${esc(k)}</td><td style="padding:6px 8px">${esc(v)}</td></tr>`));
+    $("ovs-msg").textContent = d.note || "";
+  } catch (e) { $("ovs-msg").textContent = "读取失败：" + e; }
+}
+$("ovs-load").onclick = loadOversell;
+
+// ---- 网页外观（背景色/背景图/模式）----
+async function loadWebui() {
+  if (!invoke) return;
+  $("wui-msg").textContent = "读取中…";
+  try {
+    const d = await adminCall("GET", "/api/webui");
+    $("wui-color").value = d.bg_color || "";
+    $("wui-image").value = d.bg_image || "";
+    $("wui-mode").value = d.bg_mode || "static";
+    $("wui-msg").textContent = "已读取";
+  } catch (e) { $("wui-msg").textContent = "读取失败：" + e; }
+}
+$("wui-load").onclick = loadWebui;
+$("wui-save").onclick = async () => {
+  $("wui-msg").textContent = "保存中…";
+  try {
+    await adminCall("POST", "/api/webui", {
+      bg_color: $("wui-color").value.trim(),
+      bg_image: $("wui-image").value.trim(),
+      bg_mode: $("wui-mode").value,
+    });
+    $("wui-msg").textContent = "已保存";
+  } catch (e) { $("wui-msg").textContent = "保存失败：" + e; }
+};
+
+// ---- 站点名称 ----
+$("set-save").onclick = async () => {
+  const name = $("set-name").value.trim();
+  if (!name) { $("set-msg").textContent = "名称不能为空"; return; }
+  $("set-msg").textContent = "保存中…";
+  try {
+    await adminCall("PUT", "/api/settings", { site_name: name });
+    $("set-msg").textContent = "已改名";
+  } catch (e) { $("set-msg").textContent = "保存失败：" + e; }
+};
+
+// ---- 迁移包：导出下载 / 预演导入 ----
+$("mig-export").onclick = async () => {
+  const password = $("mig-pass").value;
+  if (!password) { $("mig-msg").textContent = "导出口令必填"; return; }
+  $("mig-msg").textContent = "导出中…";
+  try {
+    const bundle = await adminCall("POST", "/api/export", {
+      password, include_secrets: $("mig-secrets").checked,
+    });
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `relayhub-bundle-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    $("mig-msg").textContent = "已导出（含密钥的包不能在线导入）";
+  } catch (e) { $("mig-msg").textContent = "导出失败：" + e; }
+};
+$("mig-dry").onclick = async () => {
+  const raw = $("mig-json").value.trim();
+  if (!raw) { $("mig-dry-msg").textContent = "先粘贴迁移包"; return; }
+  let bundle;
+  try { bundle = JSON.parse(raw); } catch (e) { $("mig-dry-msg").textContent = "不是合法 JSON"; return; }
+  $("mig-dry-msg").textContent = "预演中…";
+  try {
+    const r = await adminCall("POST", "/api/import", { bundle, dry_run: true });
+    $("mig-dry-msg").textContent =
+      `预演：用户 +${r.users_added ?? 0} / 跳过 ${r.users_skipped ?? 0}，令牌 +${r.tokens_added ?? 0}`;
+  } catch (e) { $("mig-dry-msg").textContent = "预演失败：" + e; }
+};
+
+// ---- 恢复码 ----
+$("rec-load").onclick = async () => {
+  if (!invoke) return;
+  try {
+    const d = await adminCall("GET", "/api/totp/recovery");
+    $("rec-msg").textContent = `剩余 ${d.remaining} 个可用恢复码`;
+  } catch (e) { $("rec-msg").textContent = "读取失败：" + e; }
+};
+$("rec-gen").onclick = async () => {
+  if (!confirm("重新生成会让旧恢复码全部作废，继续？")) return;
+  try {
+    const d = await adminCall("POST", "/api/totp/recovery", {});
+    $("rec-out").textContent = (d.codes || []).join("\n");
+    $("rec-msg").textContent = d.note || "已生成（只显示这一次）";
+  } catch (e) { $("rec-msg").textContent = "生成失败：" + e; }
+};
+
+// ---- 漂移与探活记录 ----
+$("drf-load").onclick = async () => {
+  if (!invoke) return;
+  $("drf-msg").textContent = "读取中…";
+  try {
+    const drift = await adminCall("GET", "/api/drift");
+    const probes = await adminCall("GET", "/api/probes");
+    const rows = [];
+    for (const [k, v] of Object.entries(drift.summary || {})) {
+      rows.push(`<tr><td style="padding:6px 8px">漂移 · ${esc(k)}</td>
+        <td style="padding:6px 8px">${esc(typeof v === "object" ? JSON.stringify(v) : v)}</td></tr>`);
+    }
+    for (const [k, v] of Object.entries(probes.summary || {})) {
+      rows.push(`<tr><td style="padding:6px 8px">探活 · ${esc(k)}</td>
+        <td style="padding:6px 8px">${esc(typeof v === "object" ? JSON.stringify(v) : v)}</td></tr>`);
+    }
+    $("drf-out").innerHTML = rows.length
+      ? table(["项", "值"], rows)
+      : '<div class="hint">还没有漂移或探活记录</div>';
+    $("drf-msg").textContent = drift.note || probes.disclaimer || "";
+  } catch (e) { $("drf-msg").textContent = "读取失败：" + e; }
+};
+
+// ---- 回滚 ----
+$("upd-rollback").onclick = async () => {
+  if (!confirm("回滚到上一版？服务会被重装并可能短暂中断")) return;
+  $("upd-msg").textContent = "回滚中…";
+  try {
+    const r = await adminCall("POST", "/api/update/rollback", {});
+    $("upd-msg").textContent = "已回滚" + (r && r.version ? ` 到 ${r.version}` : "");
+  } catch (e) { $("upd-msg").textContent = "回滚失败：" + e; }
+};
