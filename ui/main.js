@@ -1314,3 +1314,62 @@ async function loadSiteEnv() {
   } catch (e) { $("env-msg").textContent = "读取失败：" + e; }
 }
 $("env-load").onclick = loadSiteEnv;
+
+// ---- 本机实例：列表 / 停止 / 移除 ----
+async function loadInstances() {
+  if (!invoke) return;
+  $("inst-msg").textContent = "读取中…";
+  try {
+    const list = await invoke("instance_list");
+    if (!list.length) {
+      $("inst-out").innerHTML = '<div class="hint">还没有本机实例</div>';
+      $("inst-msg").textContent = "";
+      return;
+    }
+    const rows = list.map((it) => `<tr>
+      <td class="mono">:${it.port}</td>
+      <td>${it.alive ? '<span class="dot ok"></span>运行中' : '<span class="dot"></span>已退出'}</td>
+      <td class="mono">${it.pid}</td>
+      <td class="mono">${esc(it.home || "默认")}</td>
+      <td>
+        ${it.alive ? `<button class="q" data-inst-stop="${esc(it.id)}">停止</button>` : ""}
+        <button class="q" data-inst-forget="${esc(it.id)}">移除记录</button>
+      </td>
+    </tr>`);
+    $("inst-out").innerHTML = table(["端口", "状态", "PID", "数据目录", ""], rows);
+    $("inst-msg").textContent = `${list.filter((x) => x.alive).length}/${list.length} 运行中`;
+  } catch (e) { $("inst-msg").textContent = "读取失败：" + e; }
+}
+$("inst-refresh").onclick = loadInstances;
+
+$("inst-out").addEventListener("click", async (ev) => {
+  const stop = ev.target.closest("[data-inst-stop]");
+  const forget = ev.target.closest("[data-inst-forget]");
+  try {
+    if (stop) {
+      if (!confirm("停止这个实例？正在使用它的客户端会断线")) return;
+      const r = await invoke("instance_stop", { id: stop.dataset.instStop });
+      $("inst-msg").textContent = r.was_alive ? "已停止" : "本来就没在运行，已清理记录";
+    } else if (forget) {
+      await invoke("instance_forget", { id: forget.dataset.instForget });
+      $("inst-msg").textContent = "已移除记录";
+    } else return;
+    await loadInstances();
+  } catch (e) { $("inst-msg").textContent = "操作失败：" + e; }
+});
+
+// ---- 错误日志：只记失败路径，滚动 1 MB + 一个旧文件 ----
+$("err-load").onclick = async () => {
+  if (!invoke) return;
+  $("err-msg").textContent = "读取中…";
+  try {
+    const lines = await invoke("errors_tail", { limit: 200 });
+    if (!lines.length) {
+      $("err-out").textContent = "";
+      $("err-msg").textContent = "没有错误记录";
+      return;
+    }
+    $("err-out").textContent = lines.join(String.fromCharCode(10));
+    $("err-msg").textContent = `${lines.length} 行 · 时间列为 Unix 秒`;
+  } catch (e) { $("err-msg").textContent = "读取失败：" + e; }
+};

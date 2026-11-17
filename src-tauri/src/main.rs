@@ -354,7 +354,16 @@ async fn ssh_preset(
         .find(|(id, ..)| *id == preset)
         .copied()
         .ok_or_else(|| format!("未知预设 {preset}"))?;
-    let (code, stdout, stderr, ms) = ssh_exec(&host, &key_path, command)?;
+    let (code, stdout, stderr, ms) = match ssh_exec(&host, &key_path, command) {
+        Ok(v) => v,
+        Err(e) => {
+            log_error(&app, "ssh", &format!("预设 {preset} 执行失败：{e}"));
+            return Err(e);
+        }
+    };
+    if code == 255 {
+        log_error(&app, "ssh", &format!("预设 {preset} 连接失败（255）：{}", stderr.trim()));
+    }
     ssh_audit(&app, &serde_json::json!({
         "ts": now_secs(), "host": host, "kind": "preset", "preset": preset,
         "label": label, "needs_confirm": needs_confirm, "command": command,
@@ -375,7 +384,16 @@ async fn ssh_run(
 ) -> Result<serde_json::Value, String> {
     ssh_check_host(&host)?;
     ssh_check_command(&command)?;
-    let (code, stdout, stderr, ms) = ssh_exec(&host, &key_path, &command)?;
+    let (code, stdout, stderr, ms) = match ssh_exec(&host, &key_path, &command) {
+        Ok(v) => v,
+        Err(e) => {
+            log_error(&app, "ssh", &format!("自由命令执行失败：{e}"));
+            return Err(e);
+        }
+    };
+    if code == 255 {
+        log_error(&app, "ssh", &format!("自由命令连接失败（255）：{}", stderr.trim()));
+    }
     ssh_audit(&app, &serde_json::json!({
         "ts": now_secs(), "host": host, "kind": "custom", "command": command,
         "exit": code, "ms": ms,
@@ -887,10 +905,179 @@ fn env_detect() -> EnvReport {
 struct InstanceInfo {
     base_url: String,
     pid: u32,
+    version: String,
+    instance_id: String,
+}
+
+// ---- 本机实例登记：创建后能查、能停 -----------------------------------------
+// 之前 instance_create 只返回了一个 pid，没有任何地方接着用，实例就成了孤儿。
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct InstanceEntry {
+    id: String,
+    port: u16,
+    home: String,
+    pid: u32,
+    base_url: String,
+    created_at: u64,
+}
+
+fn instances_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("instances.json"))
+}
+
+fn load_instances(app: &tauri::AppHandle) -> Vec<InstanceEntry> {
+    match instances_path(app) {
+        Ok(p) => match std::fs::read_to_string(&p) {
+            Ok(raw) => serde_json::from_str(&raw).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        },
+        Err(_) => Vec::new(),
+    }
+}
+
+fn save_instances(app: &tauri::AppHandle, list: &[InstanceEntry]) -> Result<(), String> {
+    let path = instances_path(app)?;
+    let raw = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
+    std::fs::write(&path, raw).map_err(|e| format!("写 instances.json 失败：{e}"))
+}
+
+/// 进程是否还活着。Windows 用 tasklist 查，避免额外依赖 winapi。
+fn pid_alive(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        let out = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output();
+        match out {
+            Ok(o) => String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()),
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Path::new(&format!("/proc/{pid}")).exists()
+    }
+}
+
+#[tauri::command]
+fn instance_list(app: tauri::AppHandle) -> Vec<serde_json::Value> {
+    load_instances(&app)
+        .into_iter()
+        .map(|e| {
+            serde_json::json!({
+                "id": e.id, "port": e.port, "pid": e.pid, "home": e.home,
+                "base_url": e.base_url, "created_at": e.created_at,
+                "alive": pid_alive(e.pid),
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn instance_stop(app: tauri::AppHandle, id: String) -> Result<serde_json::Value, String> {
+    let mut list = load_instances(&app);
+    let idx = list
+        .iter()
+        .position(|e| e.id == id)
+        .ok_or_else(|| format!("没有这个实例：{id}"))?;
+    let entry = list[idx].clone();
+    let was_alive = pid_alive(entry.pid);
+    if was_alive {
+        #[cfg(windows)]
+        let out = std::process::Command::new("taskkill")
+            .args(["/PID", &entry.pid.to_string(), "/F", "/T"])
+            .output();
+        #[cfg(not(windows))]
+        let out = std::process::Command::new("kill")
+            .args(["-TERM", &entry.pid.to_string()])
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => {
+                let detail = String::from_utf8_lossy(&o.stderr).to_string();
+                log_error(&app, "instance_stop", &format!("pid {} 结束失败：{detail}", entry.pid));
+                return Err(format!("结束进程失败：{detail}"));
+            }
+            Err(e) => return Err(format!("调用结束命令失败：{e}")),
+        }
+        // 等它真的退出，避免列表里立刻又显示活着
+        for _ in 0..20 {
+            if !pid_alive(entry.pid) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+    list.remove(idx);
+    save_instances(&app, &list)?;
+    Ok(serde_json::json!({ "id": entry.id, "was_alive": was_alive }))
+}
+
+#[tauri::command]
+fn instance_forget(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let mut list = load_instances(&app);
+    list.retain(|e| e.id != id);
+    save_instances(&app, &list)
+}
+
+// ---- 错误日志：出问题能复盘 -------------------------------------------------
+// 只记 ERROR 级（失败路径），滚动保留 1 MB + 一个旧文件。
+fn log_error(app: &tauri::AppHandle, scope: &str, message: &str) {
+    let Ok(dir) = app.path().app_data_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("errors.log");
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > 1_048_576 {
+            let _ = std::fs::rename(&path, dir.join("errors.log.1"));
+        }
+    }
+    let stamp = now_secs();
+    let flat = message.replace(['\n', '\r'], " ⏎ ");
+    let line = format!("{stamp} [{scope}] {flat}\n");
+    use std::io::Write;
+    if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = fh.write_all(line.as_bytes());
+    }
+}
+
+#[tauri::command]
+fn errors_tail(app: tauri::AppHandle, limit: usize) -> Result<Vec<String>, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let mut lines: Vec<String> = Vec::new();
+    for name in ["errors.log.1", "errors.log"] {
+        if let Ok(raw) = std::fs::read_to_string(dir.join(name)) {
+            lines.extend(raw.lines().map(|s| s.to_string()));
+        }
+    }
+    let n = limit.clamp(1, 2000);
+    if lines.len() > n {
+        lines = lines.split_off(lines.len() - n);
+    }
+    Ok(lines)
+}
+
+/// 安装预检：python 能跑不算数，得确认 relayhub 真的可导入。
+fn relayhub_version_with(py: &str) -> Option<String> {
+    let out = std::process::Command::new(py)
+        .args(["-m", "relayhub.gateway", "--version"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() {
+        Some("(版本未知)".to_string())
+    } else {
+        Some(text)
+    }
 }
 
 #[tauri::command]
 async fn instance_create(
+    app: tauri::AppHandle,
     port: u16,
     token: String,
     home: String,
@@ -900,6 +1087,9 @@ async fn instance_create(
     let py = probe_cmd("python", &["--version"]).map(|_| "python".to_string())
         .or_else(|| probe_cmd("python3", &["--version"]).map(|_| "python3".to_string()))
         .ok_or_else(|| "未找到 python/python3".to_string())?;
+    let version = relayhub_version_with(&py).ok_or_else(|| {
+        format!("{py} 里没有 relayhub：先执行 {py} -m pip install -U hubrelay")
+    })?;
 
     let mut cmd = std::process::Command::new(py);
     cmd.args(["-m", "relayhub.gateway", "serve", "--port", &port.to_string(), "--token", &token]);
@@ -913,7 +1103,7 @@ async fn instance_create(
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
-    let child = cmd.spawn().map_err(|e| format!("启动失败：{e}"))?;
+    let mut child = cmd.spawn().map_err(|e| format!("启动失败：{e}"))?;
     let base = format!("http://127.0.0.1:{port}");
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -936,7 +1126,9 @@ async fn instance_create(
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     }
     if !ready {
-        return Err("实例 12 秒内没有就绪，请检查 Python 环境或端口占用".into());
+        let _ = child.kill();
+        log_error(&app, "instance_create", &format!("端口 {port} 12 秒未就绪"));
+        return Err("实例 12 秒内没有就绪：端口可能被占用，或网关启动失败（详见 app_data/errors.log）".into());
     }
 
     // 用启动时的临时 token 建管理员账号；账号密码来自表单
@@ -952,12 +1144,28 @@ async fn instance_create(
     if !resp.status().is_success() {
         let code = resp.status().as_u16();
         let detail = resp.text().await.unwrap_or_default();
+        let _ = child.kill();
+        log_error(&app, "instance_create", &format!("建管理员失败 HTTP {code}：{detail}"));
         return Err(format!("创建管理员账号失败（HTTP {code}）：{detail}"));
     }
+
+    let entry = InstanceEntry {
+        id: format!("{}-{}", port, child.id()),
+        port,
+        home: home.clone(),
+        pid: child.id(),
+        base_url: base.clone(),
+        created_at: now_secs(),
+    };
+    let mut list = load_instances(&app);
+    list.push(entry.clone());
+    save_instances(&app, &list)?;
 
     Ok(InstanceInfo {
         base_url: base,
         pid: child.id(),
+        version,
+        instance_id: entry.id,
     })
 }
 
@@ -980,6 +1188,10 @@ fn main() {
             site_remove,
             env_detect,
             instance_create,
+            instance_list,
+            instance_stop,
+            instance_forget,
+            errors_tail,
             overview_all,
             site_users,
             site_set_role
@@ -990,6 +1202,13 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn precheck_rejects_python_without_relayhub() {
+        // 不存在的解释器必须直接判 None，而不是等到 12 秒后报"未就绪"
+        assert!(relayhub_version_with("definitely-not-a-python-binary").is_none());
+    }
+
 
     /// 真连一次本机测试 sshd（默认忽略；显式 --ignored 才跑）。
     /// 起服务端：python E:/dev/.tmp-asar/sshtest_server.py（127.0.0.1:2222，只认 sshtest_clientkey）

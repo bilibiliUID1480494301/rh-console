@@ -177,6 +177,11 @@
       可选端口、监听地址、管理 Token、数据目录与开机自启；不捆绑运行时、不需要 Docker。</p>
       <button id="create">检测并启动实例</button>
       <span class="hint" id="createMsg"></span>
+      <div class="row tight">
+        <button id="inst-refresh">刷新本机实例</button>
+        <span class="hint" id="inst-msg"></span>
+      </div>
+      <div id="inst-out"></div>
       <hr style="border:0;border-top:1px solid var(--line);margin:16px 0" />
 <div id="dep-card" class="subblock">
           <strong>或：部署到远程主机</strong>
@@ -331,6 +336,11 @@
     </div>
     <div class="row"><span class="hint" id="pb-msg"></span></div>
     <pre id="pb-out" class="hint" style="white-space:pre-wrap;margin-top:6px"></pre>
+    <div class="row tight">
+      <button id="err-load">查看错误日志</button>
+      <span class="hint" id="err-msg"></span>
+    </div>
+    <pre id="err-out" class="out"></pre>
   </section>
 
   <section class="card" id="thm" data-group="sys">
